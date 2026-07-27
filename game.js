@@ -25,7 +25,7 @@ import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 7;
+const BUILD = 8;
 
 /* ================================================================== *
  * DOM
@@ -54,6 +54,8 @@ const el = {
   statShield: $('statShield'),
   statTags: $('statTags'),
   phaseChip: $('phaseChip'),
+  arStatus: $('arStatus'),
+  btnTestVision: $('btnTestVision'),
   finalScore: $('finalScore'),
   finalWave: $('finalWave'),
   finalBest: $('finalBest')
@@ -864,7 +866,113 @@ let lastUiTouch = 0;
 
 /* ---------------------------------------------- object recognition */
 const cameraReader = new CameraReader(renderer.getContext());
-const recognizer = new Recognizer((msg) => banner(msg, 2600));
+
+/**
+ * Recognition status is kept in state and rendered into a permanent panel.
+ * Toasts vanish in two seconds, which made it impossible to tell whether
+ * recognition was working at all.
+ */
+const vision = {
+  model: 'idle',        // idle | loading | ready | error
+  pct: 0,
+  lastLabel: null,
+  lastScore: 0,
+  lastMaterial: null,
+  lastError: null,
+  surface: false,
+  noSurfaceSince: 0
+};
+
+const recognizer = new Recognizer((msg) => {
+  const m = /(\d+)%/.exec(msg);
+  if (m) { vision.model = 'loading'; vision.pct = Number(m[1]); }
+  else if (msg.includes('جاهز')) vision.model = 'ready';
+  else if (msg.includes('فشل')) vision.model = 'error';
+  else if (msg.includes('تحميل')) vision.model = 'loading';
+  renderArStatus();
+});
+
+const ST = (cls, txt) => `<span class="val ${cls}">${txt}</span>`;
+
+function modelStatusHtml() {
+  switch (vision.model) {
+    case 'ready':   return ST('st-ok', '✓ جاهز' + (recognizer.device ? ` (${recognizer.device})` : ''));
+    case 'loading': return ST('st-wait', `⏳ تحميل ${vision.pct}%`);
+    case 'error':   return ST('st-bad', '✗ ' + (recognizer.error || 'فشل'));
+    default:        return ST('st-wait', '— لم يبدأ');
+  }
+}
+
+let lastStatusHtml = '';
+function renderArStatus() {
+  if (!el.arStatus || state.mode !== 'ar') return;
+
+  const camOk = cameraReader.available;
+  const rows = [
+    `<div class="row"><span class="lbl">سطح</span>${
+      vision.surface ? ST('st-ok', '✓ مكتشف — اضغط للوسم')
+                     : ST('st-bad', '✗ غير موجود')}</div>`,
+    `<div class="row"><span class="lbl">كاميرا</span>${
+      camOk ? ST('st-ok', '✓ متاحة')
+            : ST('st-bad', '✗ ' + (cameraReader.lastError || 'غير متاحة'))}</div>`,
+    `<div class="row"><span class="lbl">نموذج</span>${modelStatusHtml()}</div>`,
+    `<div class="row"><span class="lbl">تعرّف</span>${
+      vision.lastLabel
+        ? ST('st-ok', `${vision.lastLabel} ${Math.round(vision.lastScore * 100)}%` +
+            (vision.lastMaterial ? ` → ${getMaterial(vision.lastMaterial).label}` : ' (لا مادة)'))
+        : vision.lastError
+          ? ST('st-bad', vision.lastError)
+          : ST('st-wait', '— لم يجرِ بعد')}</div>`
+  ];
+
+  if (!vision.surface) {
+    rows.push('<div class="hint">حرّك الجوال ببطء يميناً ويساراً وأنت موجّه على سطح فيه تفاصيل (طاولة، سجادة، أرضية). الأسطح الملساء أو المعتمة لا تُكتشف.</div>');
+  } else if (!camOk) {
+    rows.push('<div class="hint">التعرف التلقائي غير متاح على هذا الجهاز — الوسم يدوي من الشرائط بالأسفل.</div>');
+  }
+
+  const html = rows.join('');
+  if (html !== lastStatusHtml) {
+    el.arStatus.innerHTML = html;
+    lastStatusHtml = html;
+  }
+}
+
+/** Runs recognition on the current view without placing anything. */
+async function testVision() {
+  if (state.mode !== 'ar') { toast('متاح داخل الواقع المعزّز فقط'); return; }
+  if (!cameraReader.available) {
+    vision.lastError = cameraReader.lastError || 'الكاميرا غير متاحة';
+    renderArStatus();
+    toast('الكاميرا غير متاحة على هذا الجهاز');
+    return;
+  }
+
+  toast('يلتقط ويصنّف…');
+  const crop = await requestCapture();
+  if (!crop) {
+    vision.lastError = 'التقاط: ' + (cameraReader.lastError || 'فشل');
+    renderArStatus();
+    return;
+  }
+
+  if (!recognizer.ready) {
+    const ok = await recognizer.load();
+    if (!ok) { vision.lastError = recognizer.error || 'فشل النموذج'; renderArStatus(); return; }
+  }
+
+  const res = await recognizer.classify(crop);
+  if (!res) {
+    vision.lastError = 'التصنيف فشل';
+  } else {
+    vision.lastLabel = res.label;
+    vision.lastScore = res.score;
+    vision.lastMaterial = res.material;
+    vision.lastError = null;
+    toast(`${res.label} ${Math.round(res.score * 100)}%`);
+  }
+  renderArStatus();
+}
 
 /**
  * The camera texture only exists inside the XR frame callback, so a tag tap
@@ -913,7 +1021,18 @@ async function recogniseAndRetag(rec) {
   }
 
   const res = await recognizer.classify(crop);
-  if (!res) { toast('لم يتعرّف على الجسم'); return; }
+  if (!res) {
+    vision.lastError = 'التصنيف فشل';
+    renderArStatus();
+    toast('لم يتعرّف على الجسم');
+    return;
+  }
+
+  vision.lastLabel = res.label;
+  vision.lastScore = res.score;
+  vision.lastMaterial = res.material;
+  vision.lastError = null;
+  renderArStatus();
 
   const pct = Math.round(res.score * 100);
 
@@ -1088,6 +1207,7 @@ async function startAR() {
     diag.camera = cameraReader.available;
     // Warm the model up in the background so the first tag is not slow.
     if (cameraReader.available) recognizer.load();
+    else vision.model = 'idle';
 
     step = 'scene';
     makeReticle();
@@ -1108,8 +1228,11 @@ async function startAR() {
     el.start.hidden = true;
     el.hud.hidden = false;
     el.cross.hidden = true;
+    if (el.arStatus) el.arStatus.hidden = false;
+    if (el.btnTestVision) el.btnTestVision.style.display = 'inline-flex';
     buildMatBar();
     updateHud();
+    renderArStatus();
     banner('وجّه جوالك على سطح ثم اضغط لوسمه — تحتاج سطحاً طرياً وسطحاً صلباً', 5200);
     state.running = true;
     renderer.setAnimationLoop(loop);
@@ -1152,7 +1275,8 @@ function placeTagFromReticle() {
     p.copy(getPlayerPosition()).addScaledVector(getPlayerDirection(), 1.2);
     q.identity();
   } else {
-    toast('وجّه على سطح مستوٍ أولاً');
+    // Actionable guidance instead of a vague instruction.
+    banner('لا يوجد سطح مكتشف — حرّك الجوال ببطء يميناً ويساراً على سطح فيه تفاصيل', 4200);
     return;
   }
 
@@ -1206,6 +1330,12 @@ function updateHitTest(frame) {
     }
   } else {
     reticle.visible = false;
+  }
+
+  // Feed the status panel so the player can see surface detection live.
+  if (vision.surface !== reticle.visible) {
+    vision.surface = reticle.visible;
+    renderArStatus();
   }
 }
 
@@ -1354,6 +1484,7 @@ function resetToMenu() {
   el.cross.hidden = true;
   el.over.hidden = true;
   el.start.hidden = false;
+  if (el.arStatus) el.arStatus.hidden = true;
   renderer.setClearAlpha(1);
   scene.background = new THREE.Color(0x0a0a14);
   // Keep rendering so the menu backdrop is not a frozen frame.
@@ -1397,6 +1528,10 @@ el.btnAR.addEventListener('click', () => {
 });
 el.btnSim.addEventListener('click', () => { audio(); startSim(); });
 el.btnPlay.addEventListener('click', (e) => { e.stopPropagation(); beginPlay(); });
+if (el.btnTestVision) {
+  el.btnTestVision.style.display = 'none';   // AR only
+  el.btnTestVision.addEventListener('click', (e) => { e.stopPropagation(); testVision(); });
+}
 el.btnExit.addEventListener('click', (e) => {
   e.stopPropagation();
   const s = renderer.xr.getSession();
