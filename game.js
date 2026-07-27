@@ -25,7 +25,7 @@ import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 9;
+const BUILD = 10;
 
 /* ================================================================== *
  * DOM
@@ -508,6 +508,326 @@ function updateSpirits(dt, playerPos) {
 }
 
 /* ================================================================== *
+ * IN-WORLD 3D UI
+ * ------------------------------------------------------------------
+ * The Meta Quest browser does not implement `dom-overlay`, so the entire
+ * HTML HUD is invisible inside a headset — every control existed but could
+ * not be seen or pressed. This panel is real geometry in the scene, aimed at
+ * with the controller/hand ray, so it works wherever WebXR works.
+ *
+ * It is one textured plane rather than many button meshes: the ray gives a
+ * UV, the UV gives a canvas row, the row is the button. Far less code and
+ * nothing to keep in sync.
+ * ================================================================== */
+const UI_W = 520, UI_H = 690;      // canvas pixels
+const UI_TOP = 210;                // status block height
+const UI_ROW = 68;                 // row height
+const UI_ROWS = 7;
+
+const ui3d = {
+  root: null,
+  mesh: null,
+  canvas: null,
+  ctx: null,
+  tex: null,
+  hover: -1,
+  active: false,
+  cursor: null,
+  rayLine: null,
+  cardsOpen: false,
+  cardsGroup: null,
+  msg: 'وجّه على سطح واضغط لوسمه'
+};
+
+const UI_ACTIONS = [
+  { id: 'material' },
+  { id: 'test' },
+  { id: 'collect' },
+  { id: 'cards' },
+  { id: 'play' },
+  { id: 'recenter' },
+  { id: 'exit' }
+];
+
+function uiRowLabel(i) {
+  switch (UI_ACTIONS[i].id) {
+    case 'material': return `المادة:  ${getMaterial(state.activeMaterial).label}`;
+    case 'test':     return 'اختبر التعرف  ◎';
+    case 'collect':  return state.phase === 'collect' ? 'رجوع للوسم  ◂' : 'وضع البطاقات  ✦';
+    case 'cards':    return `بطاقاتي (${collection.length})  ▤`;
+    case 'play':     return 'ابدأ الموجات  ▸';
+    case 'recenter': return 'أعد تمركز اللوحة  ↺';
+    case 'exit':     return 'خروج  ✕';
+  }
+  return '';
+}
+
+function uiRowEnabled(i) {
+  const id = UI_ACTIONS[i].id;
+  if (id === 'test') return cameraReader.available;
+  if (id === 'collect') return tagged.length > 0;
+  if (id === 'play') {
+    return tagged.some((t) => getMaterial(t.materialId).nest) &&
+           tagged.some((t) => getMaterial(t.materialId).charges);
+  }
+  return true;
+}
+
+function drawUI3D() {
+  const c = ui3d.ctx;
+  if (!c) return;
+
+  c.clearRect(0, 0, UI_W, UI_H);
+  roundRect(c, 4, 4, UI_W - 8, UI_H - 8, 26);
+  c.fillStyle = 'rgba(10,10,20,.93)';
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = 'rgba(169,139,255,.55)';
+  c.stroke();
+
+  /* ---- status block ---- */
+  c.textAlign = 'right';
+  c.textBaseline = 'middle';
+  c.font = '800 30px Cairo, system-ui, sans-serif';
+  c.fillStyle = '#ffffff';
+  c.fillText('MATERIA', UI_W - 26, 42);
+
+  c.font = '600 21px Cairo, system-ui, sans-serif';
+  const lines = [
+    ['سطح', vision.surface ? '✓ مكتشف' : '✗ غير موجود', vision.surface ? '#7de08a' : '#ff9d9d'],
+    ['كاميرا', cameraReader.available ? '✓ متاحة' : '✗ غير متاحة',
+      cameraReader.available ? '#7de08a' : '#ff9d9d'],
+    ['نموذج',
+      vision.model === 'ready' ? '✓ جاهز' :
+      vision.model === 'loading' ? `⏳ ${vision.pct}%` :
+      vision.model === 'error' ? '✗ فشل' : '— لم يبدأ',
+      vision.model === 'ready' ? '#7de08a' : vision.model === 'error' ? '#ff9d9d' : '#f0a95a'],
+    ['تعرّف',
+      vision.lastLabel ? `${vision.lastLabel} ${Math.round(vision.lastScore * 100)}%` : '— لا شيء',
+      vision.lastLabel ? '#6fe3ff' : '#9b97b8']
+  ];
+  lines.forEach((ln, i) => {
+    const y = 88 + i * 30;
+    c.fillStyle = '#9b97b8';
+    c.fillText(ln[0], UI_W - 26, y);
+    c.fillStyle = ln[2];
+    c.fillText(ln[1], UI_W - 130, y);
+  });
+
+  // Toasts and banners are DOM elements and therefore invisible in a headset,
+  // so the latest message is mirrored here.
+  if (ui3d.msg) {
+    c.font = '600 19px Cairo, system-ui, sans-serif';
+    c.fillStyle = '#f0a95a';
+    let msg = ui3d.msg;
+    while (msg.length > 4 && c.measureText(msg).width > UI_W - 60) msg = msg.slice(0, -2);
+    if (msg !== ui3d.msg) msg += '…';
+    c.fillText(msg, UI_W - 26, 196);
+  }
+
+  c.strokeStyle = 'rgba(255,255,255,.14)';
+  c.lineWidth = 2;
+  c.beginPath(); c.moveTo(20, UI_TOP - 8); c.lineTo(UI_W - 20, UI_TOP - 8); c.stroke();
+
+  /* ---- buttons ---- */
+  c.font = '700 25px Cairo, system-ui, sans-serif';
+  for (let i = 0; i < UI_ROWS; i++) {
+    const y = UI_TOP + i * UI_ROW;
+    const on = uiRowEnabled(i);
+    const hot = ui3d.hover === i;
+
+    roundRect(c, 18, y + 5, UI_W - 36, UI_ROW - 10, 14);
+    c.fillStyle = hot ? 'rgba(169,139,255,.30)' : 'rgba(255,255,255,.055)';
+    c.fill();
+    c.lineWidth = hot ? 3 : 1.5;
+    c.strokeStyle = hot ? '#a98bff' : 'rgba(255,255,255,.13)';
+    c.stroke();
+
+    c.fillStyle = on ? (hot ? '#ffffff' : '#e8e4ff') : 'rgba(255,255,255,.32)';
+    c.fillText(uiRowLabel(i), UI_W - 40, y + UI_ROW / 2);
+  }
+
+  if (ui3d.tex) ui3d.tex.needsUpdate = true;
+}
+
+function buildUI3D() {
+  if (ui3d.root) return;
+
+  ui3d.canvas = document.createElement('canvas');
+  ui3d.canvas.width = UI_W;
+  ui3d.canvas.height = UI_H;
+  ui3d.ctx = ui3d.canvas.getContext('2d');
+
+  ui3d.tex = new THREE.CanvasTexture(ui3d.canvas);
+  ui3d.tex.colorSpace = THREE.SRGBColorSpace;
+
+  const aspect = UI_H / UI_W;
+  const w = 0.46;
+  ui3d.mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, w * aspect),
+    new THREE.MeshBasicMaterial({ map: ui3d.tex, transparent: true })
+  );
+
+  ui3d.root = new THREE.Group();
+  ui3d.root.add(ui3d.mesh);
+  scene.add(ui3d.root);
+
+  // Ray + cursor so the player can see where they are pointing.
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -2.2)
+  ]);
+  ui3d.rayLine = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({
+    color: 0x6fe3ff, transparent: true, opacity: 0.5
+  }));
+
+  ui3d.cursor = new THREE.Mesh(
+    new THREE.SphereGeometry(0.008, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0x6fe3ff })
+  );
+  ui3d.cursor.visible = false;
+  scene.add(ui3d.cursor);
+
+  ui3d.active = true;
+  recenterUI3D();
+  drawUI3D();
+}
+
+/** Parks the panel in front of the player, slightly left and below centre. */
+function recenterUI3D() {
+  if (!ui3d.root) return;
+  const p = getPlayerPosition().clone();
+  const d = getPlayerDirection().clone();
+  d.y = 0;
+  if (d.lengthSq() < 1e-6) d.set(0, 0, -1);
+  d.normalize();
+
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), d).normalize();
+  const pos = p.clone().addScaledVector(d, 0.95).addScaledVector(right, 0.34);
+  pos.y = p.y - 0.22;
+
+  ui3d.root.position.copy(pos);
+  ui3d.root.lookAt(p.x, p.y - 0.1, p.z);
+}
+
+const _ray = new THREE.Raycaster();
+const _m4 = new THREE.Matrix4();
+
+/** XR controllers double as hand target-rays, so one path covers both. */
+function getPointers() {
+  const out = [];
+  if (!renderer.xr.isPresenting) return out;
+  for (let i = 0; i < 2; i++) {
+    const c = renderer.xr.getController(i);
+    if (c && c.visible !== false) out.push(c);
+  }
+  return out;
+}
+
+function updateUI3D() {
+  if (!ui3d.active || !ui3d.mesh) return;
+
+  let bestRow = -1;
+  let bestPoint = null;
+
+  for (const ptr of getPointers()) {
+    _m4.identity().extractRotation(ptr.matrixWorld);
+    const origin = new THREE.Vector3().setFromMatrixPosition(ptr.matrixWorld);
+    const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(_m4).normalize();
+    _ray.set(origin, dir);
+
+    const hits = _ray.intersectObject(ui3d.mesh, false);
+    if (hits.length && hits[0].uv) {
+      const py = (1 - hits[0].uv.y) * UI_H;
+      if (py >= UI_TOP) {
+        const row = Math.floor((py - UI_TOP) / UI_ROW);
+        if (row >= 0 && row < UI_ROWS) { bestRow = row; bestPoint = hits[0].point; }
+      }
+      if (!bestPoint) bestPoint = hits[0].point;
+    }
+
+    // Attach the visible ray to whichever pointer exists.
+    if (ui3d.rayLine.parent !== ptr) ptr.add(ui3d.rayLine);
+  }
+
+  if (bestPoint) {
+    ui3d.cursor.position.copy(bestPoint);
+    ui3d.cursor.visible = true;
+  } else {
+    ui3d.cursor.visible = false;
+  }
+
+  if (bestRow !== ui3d.hover) {
+    ui3d.hover = bestRow;
+    drawUI3D();
+  }
+}
+
+/** @returns true when the select was consumed by the panel. */
+function pressUI3D() {
+  if (!ui3d.active || ui3d.hover < 0) return false;
+  const row = ui3d.hover;
+  if (!uiRowEnabled(row)) { toast('غير متاح الآن'); return true; }
+
+  switch (UI_ACTIONS[row].id) {
+    case 'material': {
+      const i = MATERIAL_ORDER.indexOf(state.activeMaterial);
+      state.activeMaterial = MATERIAL_ORDER[(i + 1) % MATERIAL_ORDER.length];
+      toast(`المادة: ${getMaterial(state.activeMaterial).label}`);
+      break;
+    }
+    case 'test': testVision(); break;
+    case 'collect':
+      if (state.phase === 'collect') { state.phase = 'tag'; updateHud(); toast('وضع الوسم'); }
+      else beginCollect();
+      break;
+    case 'cards': toggleCards3D(); break;
+    case 'play': beginPlay(); break;
+    case 'recenter': recenterUI3D(); toast('تم تمركز اللوحة'); break;
+    case 'exit': {
+      const s = renderer.xr.getSession();
+      if (s) s.end().catch(() => {});
+      break;
+    }
+  }
+  drawUI3D();
+  return true;
+}
+
+/** Floating 3D gallery of minted cards, for headsets with no DOM. */
+function toggleCards3D() {
+  if (ui3d.cardsOpen) {
+    if (ui3d.cardsGroup) { scene.remove(ui3d.cardsGroup); ui3d.cardsGroup = null; }
+    ui3d.cardsOpen = false;
+    return;
+  }
+  if (!collection.length) { toast('لا بطاقات بعد'); return; }
+
+  const g = new THREE.Group();
+  const p = getPlayerPosition().clone();
+  const d = getPlayerDirection().clone(); d.y = 0; d.normalize();
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), d).normalize();
+
+  const show = collection.slice(-8);
+  show.forEach((data, i) => {
+    const col = i % 4, rowN = Math.floor(i / 4);
+    const m = makeCardMesh(data);
+    m.scale.setScalar(1.5);
+    const pos = p.clone()
+      .addScaledVector(d, 1.15)
+      .addScaledVector(right, (col - 1.5) * -0.26);
+    pos.y = p.y + 0.16 - rowN * 0.34;
+    m.position.copy(pos);
+    m.lookAt(p);
+    g.add(m);
+  });
+
+  scene.add(g);
+  ui3d.cardsGroup = g;
+  ui3d.cardsOpen = true;
+  toast('اضغط «بطاقاتي» مرة ثانية للإغلاق');
+}
+
+/* ================================================================== *
  * CARDS
  * ------------------------------------------------------------------
  * A recognised real object becomes a collectible card. The loop:
@@ -840,6 +1160,9 @@ function buildMatBar() {
 }
 
 function updateHud() {
+  // Keep the in-world panel in step with every state change.
+  if (ui3d.active) drawUI3D();
+
   el.statScore.textContent = state.score.toLocaleString('en-US');
   el.statWave.textContent = state.wave || '—';
   el.statShield.textContent = '◆'.repeat(Math.max(0, state.shield)) || '—';
@@ -863,6 +1186,7 @@ function updateHud() {
 
 let toastTimer = null;
 function toast(msg) {
+  if (ui3d.active) { ui3d.msg = msg; drawUI3D(); }
   el.toast.textContent = msg;
   el.toast.classList.add('show');
   clearTimeout(toastTimer);
@@ -871,6 +1195,7 @@ function toast(msg) {
 
 let bannerTimer = null;
 function banner(msg, ms = 2600) {
+  if (ui3d.active) { ui3d.msg = msg; drawUI3D(); }
   el.banner.textContent = msg;
   el.banner.classList.remove('hide');
   clearTimeout(bannerTimer);
@@ -981,6 +1306,9 @@ function getPlayerDirection() {
  * hand pinch, so no separate control scheme is needed.
  */
 function onSelect() {
+  // The in-world panel gets first refusal on every select.
+  if (pressUI3D()) return;
+
   if (state.phase === 'tag') placeTagFromReticle();
   else if (state.phase === 'collect') {
     if (heldCard) throwHeldCard();
@@ -1168,6 +1496,7 @@ function modelStatusHtml() {
 
 let lastStatusHtml = '';
 function renderArStatus() {
+  if (ui3d.active) drawUI3D();          // headset path
   if (!el.arStatus || state.mode !== 'ar') return;
 
   const camOk = cameraReader.available;
@@ -1539,15 +1868,29 @@ async function startAR() {
     });
 
     step = 'ui';
+    /**
+     * `domOverlayState` is null when the runtime refused dom-overlay — that is
+     * the Quest browser. In that case the HTML HUD is invisible, so the
+     * in-world 3D panel becomes the only interface.
+     */
+    diag.domOverlay = !!session.domOverlayState;
+
     el.start.hidden = true;
-    el.hud.hidden = false;
     el.cross.hidden = true;
-    if (el.arStatus) el.arStatus.hidden = false;
-    if (el.btnTestVision) el.btnTestVision.style.display = 'inline-flex';
-    buildMatBar();
+
+    if (diag.domOverlay) {
+      el.hud.hidden = false;
+      if (el.arStatus) el.arStatus.hidden = false;
+      if (el.btnTestVision) el.btnTestVision.style.display = 'inline-flex';
+      buildMatBar();
+      renderArStatus();
+      banner('وجّه على سطح ثم اضغط لوسمه — تحتاج سطحاً طرياً وسطحاً صلباً', 5200);
+    } else {
+      el.hud.hidden = true;              // would be invisible anyway
+      buildUI3D();
+    }
+
     updateHud();
-    renderArStatus();
-    banner('وجّه جوالك على سطح ثم اضغط لوسمه — تحتاج سطحاً طرياً وسطحاً صلباً', 5200);
     state.running = true;
     renderer.setAnimationLoop(loop);
   } catch (err) {
@@ -1718,6 +2061,7 @@ function loop(time, frame) {
     physics.step(dt);
     syncOrbs();
     updateHeldCard(dt);
+    updateUI3D();
 
     if (state.phase === 'play') {
       updateSpiritShields();
@@ -1770,6 +2114,13 @@ function clearWorld() {
   tagged.length = 0;
 
   if (heldCard) { scene.remove(heldCard.mesh); heldCard = null; }
+
+  if (ui3d.root) { scene.remove(ui3d.root); ui3d.root = null; ui3d.mesh = null; }
+  if (ui3d.cursor) { scene.remove(ui3d.cursor); ui3d.cursor = null; }
+  if (ui3d.cardsGroup) { scene.remove(ui3d.cardsGroup); ui3d.cardsGroup = null; }
+  ui3d.active = false;
+  ui3d.hover = -1;
+  ui3d.cardsOpen = false;
 
   for (const b of bursts) {
     if (b.pts) scene.remove(b.pts);
@@ -1886,6 +2237,7 @@ const diag = {
   sessionError: null,
   refSpace: null,
   camera: null,
+  domOverlay: null,
   ua: navigator.userAgent
 };
 
@@ -1936,6 +2288,7 @@ function diagLine() {
          `build=${BUILD} · secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
          (diag.refSpace ? ` · space=${diag.refSpace}` : '') +
          (diag.camera !== null ? ` · cam=${diag.camera}` : '') +
+         (diag.domOverlay !== null ? ` · dom=${diag.domOverlay}` : '') +
          (diag.sessionError ? ` · err=${diag.sessionError}` : '') +
          `</small>`;
 }
