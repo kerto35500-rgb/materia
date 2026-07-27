@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>MATERIA — اللعب</title>
+<meta name="theme-color" content="#06060c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="game.css">
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<canvas id="gl"></canvas>
+
+<!-- ============================================================ HUD -->
+<div id="hud" hidden>
+  <div class="hud-top">
+    <div class="chipset">
+      <span class="chip stat">النقاط <b id="statScore">0</b></span>
+      <span class="chip stat">موجة <b id="statWave">—</b></span>
+      <span class="chip stat" style="color:#ff9d9d">دروع <b id="statShield">◆◆◆</b></span>
+      <span class="chip stat">موسوم <b id="statTags">0</b></span>
+    </div>
+    <div class="chipset">
+      <span class="chip stat" id="phaseChip">وضع الوسم</span>
+      <button class="chip" id="btnExit">خروج</button>
+    </div>
+  </div>
+
+  <div class="hud-bottom">
+    <div class="banner hide" id="banner"></div>
+    <div class="matbar" id="matbar"></div>
+    <button class="chip big" id="btnPlay" style="color:#7de08a" disabled>ابدأ الموجات ▸</button>
+  </div>
+</div>
+
+<div id="cross" hidden></div>
+<div id="toast"></div>
+<div id="flash"></div>
+
+<!-- ========================================================== START -->
+<div class="layer" id="startLayer">
+  <div class="panel">
+    <h1>MATERIA</h1>
+    <p>
+      وسّم أسطح غرفتك بموادها، ثم دافع عنها.
+      الكرة ترتدّ عن الصلب فتُشحن، وتُبلع في الطري فتنطفئ.
+      الأرواح المحمية لا تسقط إلا بكرة مشحونة.
+    </p>
+
+    <div class="mode-grid">
+      <button class="mode" id="btnAR" disabled>
+        <span class="mi">◉</span>
+        <span class="mt">
+          <b>واقع معزّز — غرفتك الحقيقية</b>
+          <span>أندرويد Chrome أو متصفح Quest</span>
+        </span>
+      </button>
+
+      <button class="mode" id="btnSim">
+        <span class="mi">▣</span>
+        <span class="mt">
+          <b>وضع المحاكاة — غرفة ثلاثية الأبعاد</b>
+          <span>يشتغل على أي جهاز، بنفس الفيزياء تماماً</span>
+        </span>
+      </button>
+    </div>
+
+    <div class="note" id="arNote">جاري فحص قدرات الجهاز…</div>
+
+    <div class="note" style="border-top:none;padding-top:8px">
+      <b>التحكم:</b> في المحاكاة اسحب للنظر واضغط ضغطة قصيرة للرمي (أو مفتاح المسافة).
+      في الواقع المعزّز وجّه الجوال واضغط على الشاشة.
+    </div>
+
+    <a href="index.html" style="display:inline-block;margin-top:16px;color:#a5a1c2;font-size:13.5px">← رجوع للصفحة الرئيسية</a>
+  </div>
+</div>
+
+<!-- ====================================================== GAME OVER -->
+<div class="layer" id="overLayer" hidden>
+  <div class="panel">
+    <h2>انتهت الجولة</h2>
+    <p>تسللت الأرواح كلها. جرّب وسم أسطح صلبة أكثر لتصنع مسارات ارتداد أفضل.</p>
+
+    <div class="scoreline">
+      <div><b id="finalScore">0</b><span>النقاط</span></div>
+      <div><b id="finalWave">0</b><span>الموجات</span></div>
+      <div><b id="finalBest">0</b><span>أفضل نتيجة</span></div>
+    </div>
+
+    <button class="btn primary wide" id="btnRetry">جولة جديدة</button>
+    <button class="btn ghost wide" id="btnHome" style="margin-top:10px">الصفحة الرئيسية</button>
+  </div>
+</div>
+
+<script type="module" src="game.js"></script>
+</body>
+</html>

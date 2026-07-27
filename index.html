@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MATERIA — غرفتك هي الملعب</title>
+<meta name="description" content="لعبة واقع معزّز في المتصفح تفهم مواد أثاث غرفتك الحقيقية وتحوّلها إلى فيزياء: المخدة تبلع الكرة والطاولة ترتدّها.">
+<meta name="theme-color" content="#07070d">
+
+<meta property="og:title" content="MATERIA — غرفتك هي الملعب">
+<meta property="og:description" content="واقع معزّز في المتصفح يفهم مواد غرفتك ويحوّلها إلى فيزياء.">
+<meta property="og:type" content="website">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="aurora">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+</div>
+<div class="grid-overlay"></div>
+
+<!-- ============================================================ NAV -->
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <div class="logo">
+      <div class="logo-mark"></div>
+      <span>MATERIA</span>
+    </div>
+    <div class="nav-links">
+      <a href="#lab">مختبر المواد</a>
+      <a href="#how">كيف يشتغل</a>
+      <a href="#pipeline">التقنية</a>
+      <a href="#limits">الحدود</a>
+    </div>
+    <a class="btn" href="game.html" style="padding:10px 20px;font-size:15px">ابدأ اللعب</a>
+  </div>
+</nav>
+
+<!-- =========================================================== HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="badge">
+      <span class="dot"></span>
+      <span>يشتغل في المتصفح — بدون تطبيق وبدون تحميل</span>
+    </div>
+
+    <h1>
+      غرفتك الحقيقية<br>
+      صارت <span class="grad">ملعب فيزياء</span>
+    </h1>
+
+    <p class="lede">
+      كل تجارب الواقع المعزّز تتعامل مع أثاثك كجدار صلب واحد.
+      <strong>MATERIA</strong> تفهم أن المخدة طرية والطاولة صلبة والزجاج يرتدّ —
+      فتبلع كرتك أو ترتدّها بشكل مختلف تماماً. المعرفة بالمادة هي أسلوب اللعب نفسه.
+    </p>
+
+    <div class="cta-row">
+      <a class="btn primary" href="game.html">
+        <span>ابدأ التجربة</span>
+        <span aria-hidden="true">←</span>
+      </a>
+      <a class="btn" href="#lab">جرّب مختبر المواد</a>
+    </div>
+
+    <!-- device capability probe -->
+    <div class="probe" id="probe">
+      <div class="probe-row">
+        <span class="k">واقع معزّز غامر (WebXR AR)</span>
+        <span class="v"><span class="pill wait" id="pAR">جاري الفحص…</span></span>
+      </div>
+      <div class="probe-row">
+        <span class="k">اتصال آمن HTTPS (شرط إجباري للـ AR)</span>
+        <span class="v"><span class="pill wait" id="pHttps">—</span></span>
+      </div>
+      <div class="probe-row">
+        <span class="k">وضع المحاكاة (يشتغل على أي جهاز)</span>
+        <span class="v"><span class="pill yes">متاح</span></span>
+      </div>
+      <div class="probe-row">
+        <span class="k" id="pAdvice" style="color:var(--muted);font-size:13.4px">…</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ==================================================== MATERIAL LAB -->
+<section id="lab">
+  <div class="wrap reveal">
+    <div class="eyebrow">المختبر</div>
+    <h2>الفكرة كلها في هذي التجربة</h2>
+    <p class="sub">
+      اختر مادة وشوف الكرة تتصرّف. نفس الكرة، نفس الجذب، نفس السرعة —
+      الفرق الوحيد هو ما تعرفه اللعبة عن السطح. هذا بالضبط ما يحدث داخل غرفتك.
+    </p>
+
+    <div class="lab">
+      <div class="lab-canvas-card">
+        <canvas id="labCanvas" width="640" height="320"></canvas>
+        <div class="lab-caption" id="labCaption">اضغط على اللوحة لإسقاط كرة جديدة</div>
+      </div>
+      <div class="mat-list" id="matList"><!-- built by script --></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================== HOW -->
+<section id="how">
+  <div class="wrap reveal">
+    <div class="eyebrow">اللعب</div>
+    <h2>مرحلتان: امسح ثم العب</h2>
+    <p class="sub">
+      الفصل بين المسح واللعب هو ما يجعل الأداء ممكناً: كل الحساب الثقيل يحدث
+      قبل أن تبدأ، واللعب نفسه يشتغل على أشكال مبسّطة بستين إطاراً في الثانية.
+    </p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="ico">◎</div>
+        <h3>١. وسّم غرفتك</h3>
+        <p>وجّه جوالك على سطح واضغط. اللعبة تثبّت شكل تصادم في مكانه وتسألك عن مادته — أو تخمّنها تلقائياً من تسميات WebXR الدلالية إن توفّرت.</p>
+      </div>
+      <div class="card">
+        <div class="ico">✦</div>
+        <h3>٢. الأرواح تتسلل</h3>
+        <p>كائنات ضوئية تظهر في غرفتك وتختبئ خلف الأشياء الطرية — لأن الطري يمتص طاقتها ويحميها. الأشياء الطرية صارت غطاءً حقيقياً.</p>
+      </div>
+      <div class="card">
+        <div class="ico">◈</div>
+        <h3>٣. ارتدّ لتصل</h3>
+        <p>الرمي المباشر لا يكفي. لازم ترتدّ الكرة عن سطح صلب أو زجاج لتُشحن، ثم تصيب الروح المتخفية. الطاولة صارت سلاحك.</p>
+      </div>
+      <div class="card">
+        <div class="ico">◐</div>
+        <h3>٤. الإخفاء الحقيقي</h3>
+        <p>على الأجهزة التي تدعم استشعار العمق، تختفي الكائنات فعلياً خلف كنبتك الحقيقية. هذي وحدها تكفي لبيع الفكرة.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================== PIPELINE -->
+<section id="pipeline">
+  <div class="wrap reveal">
+    <div class="eyebrow">التقنية</div>
+    <h2>كل شيء داخل المتصفح</h2>
+    <p class="sub">
+      لا محرك ألعاب، لا تطبيق، لا خادم. الصفحة التي تفتحها هي اللعبة كاملة.
+    </p>
+
+    <div class="pipe">
+      <div class="step">
+        <div class="n">١</div>
+        <div class="body">
+          <b>الكاميرا والتتبع</b>
+          <span>جلسة واقع معزّز غامرة مع تتبع ست درجات حرية من نظام التشغيل</span>
+        </div>
+        <div class="tech">WebXR immersive-ar</div>
+      </div>
+      <div class="step">
+        <div class="n">٢</div>
+        <div class="body">
+          <b>إيجاد الأسطح</b>
+          <span>اختبار الإصابة يحوّل لمستك على الشاشة إلى نقطة ثلاثية الأبعاد على سطح حقيقي</span>
+        </div>
+        <div class="tech">hit-test + plane-detection</div>
+      </div>
+      <div class="step">
+        <div class="n">٣</div>
+        <div class="body">
+          <b>الشكل والتثبيت</b>
+          <span>شكل تصادم محدّب مبسّط يُثبَّت في مكانه بمرساة تصمد عبر الجلسات</span>
+        </div>
+        <div class="tech">anchors</div>
+      </div>
+      <div class="step">
+        <div class="n">٤</div>
+        <div class="body">
+          <b>المادة → الفيزياء</b>
+          <span>ستة تصنيفات مادية تحدّد الارتداد والاحتكاك والامتصاص — قلب المشروع</span>
+        </div>
+        <div class="tech">materials.js</div>
+      </div>
+      <div class="step">
+        <div class="n">٥</div>
+        <div class="body">
+          <b>المحرك الفيزيائي</b>
+          <span>حل تصادم كرة مقابل صندوق موجّه بخطوات فرعية، مكتوب يدوياً بلا أي اعتماديات</span>
+        </div>
+        <div class="tech">physics.js</div>
+      </div>
+      <div class="step">
+        <div class="n">٦</div>
+        <div class="body">
+          <b>الإخفاء</b>
+          <span>خريطة العمق تخفي الكائنات خلف أثاثك الحقيقي عند توفّر الدعم</span>
+        </div>
+        <div class="tech">depth-sensing</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================== LIMITS -->
+<section id="limits">
+  <div class="wrap reveal">
+    <div class="eyebrow">بصراحة</div>
+    <h2>الحدود الحقيقية</h2>
+    <p class="sub">أي شخص يبيعك هذي التقنية بدون ذكر هذي النقاط يخفي عنك شيئاً.</p>
+
+    <div class="limits">
+      <h3>اقرأ هذا قبل أن تحكم على التجربة</h3>
+      <ul>
+        <li><b>آيفون وآيباد لا يدعمان الواقع المعزّز في المتصفح.</b> Safari لا يوفّر <code>immersive-ar</code> حتى الآن. على آيفون سيفتح وضع المحاكاة تلقائياً — نفس الفيزياء ونفس اللعب داخل غرفة ثلاثية الأبعاد.</li>
+        <li><b>الأجهزة المدعومة:</b> Chrome على أندرويد، ومتصفح Meta Quest.</li>
+        <li><b>لا بد من HTTPS.</b> فتح الملف مباشرة من جهازك لن يشغّل الـ AR — يحتاج استضافة آمنة.</li>
+        <li><b>التعرّف التلقائي على الأجسام محدود.</b> قراءة بكسلات الكاميرا داخل جلسة WebXR تتطلب صلاحية <code>raw-camera-access</code> غير المتاحة على أغلب الأجهزة، لذا الوسم بلمسة واحدة هو المسار الموثوق. التخمين التلقائي يعمل حين يوفّر الجهاز تسميات دلالية.</li>
+        <li><b>القياس تقديري لا مطلق.</b> كافٍ تماماً للعب، وغير كافٍ لو أردت طباعة غلاف حماية بمقاسات دقيقة.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0">
+  <div class="wrap reveal" style="text-align:center">
+    <h2>جاهز؟</h2>
+    <p class="sub" style="margin-inline:auto">
+      افتح الرابط من جوالك. إن كان أندرويد ستدخل غرفتك مباشرة، وإن كان غير ذلك ستدخل المحاكي.
+    </p>
+    <a class="btn primary" href="game.html" style="font-size:18px;padding:17px 40px">ابدأ اللعب الآن</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    MATERIA — نموذج تقني لفكرة الفيزياء المادية في الواقع المعزّز داخل المتصفح.
+    <br>مبني على WebXR و three.js ومحرك فيزياء مكتوب خصيصاً.
+  </div>
+</footer>
+
+<!-- ========================================================= SCRIPT -->
+<script type="module">
+import { MATERIALS, MATERIAL_ORDER } from './materials.js';
+
+/* ---------------------------------------- capability probe */
+(async function probe() {
+  const pAR = document.getElementById('pAR');
+  const pHttps = document.getElementById('pHttps');
+  const pAdvice = document.getElementById('pAdvice');
+
+  const secure = window.isSecureContext;
+  pHttps.className = 'pill ' + (secure ? 'yes' : 'no');
+  pHttps.textContent = secure ? 'آمن' : 'غير آمن';
+
+  let arOK = false;
+  if (navigator.xr && navigator.xr.isSessionSupported) {
+    try { arOK = await navigator.xr.isSessionSupported('immersive-ar'); }
+    catch { arOK = false; }
+  }
+
+  pAR.className = 'pill ' + (arOK ? 'yes' : 'no');
+  pAR.textContent = arOK ? 'مدعوم' : 'غير مدعوم';
+
+  const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  pAdvice.textContent = arOK
+    ? '✓ جهازك يدعم الواقع المعزّز الكامل — ستدخل غرفتك الحقيقية مباشرة.'
+    : isiOS
+      ? 'جهازك من Apple، وSafari لا يوفّر الواقع المعزّز في المتصفح. سيفتح وضع المحاكاة بنفس الفيزياء واللعب.'
+      : !secure
+        ? 'الصفحة تُفتح بدون HTTPS. انشرها على استضافة آمنة ليعمل الواقع المعزّز، أو استمر بوضع المحاكاة.'
+        : 'لم نجد دعم الواقع المعزّز. استخدم Chrome على أندرويد أو متصفح Quest، أو استمر بوضع المحاكاة.';
+})();
+
+/* ---------------------------------------- material list + bounce lab */
+const matList = document.getElementById('matList');
+const caption = document.getElementById('labCaption');
+let current = 'soft';
+
+MATERIAL_ORDER.forEach((id) => {
+  const m = MATERIALS[id];
+  const b = document.createElement('button');
+  b.className = 'mat' + (id === current ? ' active' : '');
+  b.style.color = m.accent;
+  b.innerHTML = `
+    <span class="swatch" style="background:${m.accent}"></span>
+    <span class="mat-name">${m.label}</span>
+    <span class="mat-hint">${m.hint}</span>
+    <span class="mat-num">ارتداد ${m.restitution.toFixed(2)}</span>`;
+  b.addEventListener('click', () => {
+    current = id;
+    [...matList.children].forEach((c) => c.classList.remove('active'));
+    b.classList.add('active');
+    caption.textContent = `${m.label} — ارتداد ${m.restitution.toFixed(2)} · احتكاك ${m.friction.toFixed(2)} · امتصاص ${m.absorb.toFixed(2)}`;
+    drop();
+  });
+  matList.appendChild(b);
+});
+
+/* 2D bounce demo — same restitution values the 3D engine uses */
+const cv = document.getElementById('labCanvas');
+const ctx = cv.getContext('2d');
+let W = 640, H = 320;
+
+function resize() {
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(320, Math.round(r.width));
+  H = Math.round(r.height) || 320;
+  cv.width = W * dpr;
+  cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const FLOOR_PAD = 46;
+let ball = null;
+const ghosts = [];   // fading impact rings
+
+function drop() {
+  ball = { x: W / 2, y: 34, vx: 0, vy: 0, r: 13, hits: 0, dead: false };
+}
+drop();
+
+cv.addEventListener('click', drop);
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 1 / 30);
+  last = now;
+
+  const m = MATERIALS[current];
+  const floorY = H - FLOOR_PAD;
+
+  ctx.clearRect(0, 0, W, H);
+
+  /* surface slab */
+  const g = ctx.createLinearGradient(0, floorY, 0, H);
+  g.addColorStop(0, m.accent + 'cc');
+  g.addColorStop(1, m.accent + '11');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, floorY, W, H - floorY);
+
+  ctx.strokeStyle = m.accent;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, floorY);
+  ctx.lineTo(W, floorY);
+  ctx.stroke();
+
+  /* soft materials get a plush texture cue, rigid ones get hatching */
+  ctx.globalAlpha = .5;
+  ctx.lineWidth = 1;
+  for (let x = 12; x < W; x += 26) {
+    ctx.beginPath();
+    if (m.absorb > 0.4) {
+      ctx.arc(x, floorY + 15, 9, Math.PI, 0);
+    } else {
+      ctx.moveTo(x, floorY + 5);
+      ctx.lineTo(x + 12, H - 6);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  /* label */
+  ctx.fillStyle = m.accent;
+  ctx.font = '700 15px Cairo, system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(m.label, 16, floorY - 14);
+
+  /* impact rings */
+  for (let i = ghosts.length - 1; i >= 0; i--) {
+    const gh = ghosts[i];
+    gh.t += dt;
+    const k = gh.t / gh.life;
+    if (k >= 1) { ghosts.splice(i, 1); continue; }
+    ctx.globalAlpha = (1 - k) * .8;
+    ctx.strokeStyle = gh.color;
+    ctx.lineWidth = 2.5 * (1 - k) + .5;
+    ctx.beginPath();
+    ctx.ellipse(gh.x, gh.y, 12 + k * 46, 5 + k * 15, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /* physics */
+  if (ball && !ball.dead) {
+    ball.vy += 1500 * dt;
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    if (ball.y + ball.r > floorY) {
+      ball.y = floorY - ball.r;
+      if (ball.vy > 0) {
+        const impact = ball.vy;
+        ball.vy = -ball.vy * m.restitution;
+        ball.vx *= 1 - m.friction * 0.5;
+        ball.hits++;
+        ghosts.push({ x: ball.x, y: floorY, t: 0, life: .55, color: m.accent });
+        if (Math.abs(ball.vy) < 26 || ball.hits > 26) {
+          ball.vy = 0;
+          ball.dead = true;
+        }
+        void impact;
+      }
+    }
+
+    if (ball.x < ball.r) { ball.x = ball.r; ball.vx = Math.abs(ball.vx) * .6; }
+    if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx = -Math.abs(ball.vx) * .6; }
+
+    /* trail + ball */
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = m.accent;
+    ctx.shadowBlur = 22;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    /* squash cue while resting on a soft surface */
+    if (ball.dead && m.absorb > .4) {
+      ctx.globalAlpha = .35;
+      ctx.fillStyle = m.accent;
+      ctx.beginPath();
+      ctx.ellipse(ball.x, floorY + 4, ball.r * 1.5, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  } else if (ball && ball.dead) {
+    ctx.fillStyle = '#ffffffcc';
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = m.accent;
+    ctx.font = '700 13px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`عدد الارتدادات: ${ball.hits}`, W / 2, 28);
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------------------------------------- scroll reveal */
+const io = new IntersectionObserver((entries) => {
+  entries.forEach((e) => { if (e.isIntersecting) e.target.classList.add('in'); });
+}, { threshold: 0.12 });
+document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>
