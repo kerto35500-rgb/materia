@@ -23,6 +23,9 @@ import { PhysicsWorld, BoxCollider, PlaneCollider, v3, segPointDist2 } from './p
 
 const MAX_TAGGED = 26;
 
+/** Bumped on every deploy so the running build is identifiable on-screen. */
+const BUILD = 5;
+
 /* ================================================================== *
  * DOM
  * ================================================================== */
@@ -1339,7 +1342,7 @@ function arHelpHtml() {
 /** Compact technical readout the player can screenshot and send. */
 function diagLine() {
   return `<small style="opacity:.75;display:block;margin-top:12px;direction:ltr;text-align:left;font-family:ui-monospace,monospace">` +
-         `secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
+         `build=${BUILD} · secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
          (diag.sessionError ? ` · err=${diag.sessionError}` : '') +
          `</small>`;
 }
