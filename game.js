@@ -25,7 +25,7 @@ import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 8;
+const BUILD = 9;
 
 /* ================================================================== *
  * DOM
@@ -56,6 +56,11 @@ const el = {
   phaseChip: $('phaseChip'),
   arStatus: $('arStatus'),
   btnTestVision: $('btnTestVision'),
+  btnCollect: $('btnCollect'),
+  btnCards: $('btnCards'),
+  cardsLayer: $('cardsLayer'),
+  cardsGrid: $('cardsGrid'),
+  btnCardsClose: $('btnCardsClose'),
   finalScore: $('finalScore'),
   finalWave: $('finalWave'),
   finalBest: $('finalBest')
@@ -343,9 +348,22 @@ function updateFx(dt) {
       b.ring.material.opacity = k * 0.9;
     }
 
+    // Minted card: blooms to full size, rises, then fades away.
+    if (b.card) {
+      const t = 1 - k;
+      const grow = Math.min(1, t * 3.2);
+      b.card.scale.setScalar(0.2 + grow * 1.5);
+      b.card.position.y = b.from.y + t * 0.45;
+      b.card.rotation.z = Math.sin(t * 7) * 0.12;
+      b.card.material.opacity = k < 0.35 ? k / 0.35 : 1;
+      b.card.material.transparent = true;
+      b.card.lookAt(getPlayerPosition());
+    }
+
     if (b.life <= 0) {
       if (b.pts) { scene.remove(b.pts); b.pts.geometry.dispose(); b.pts.material.dispose(); }
       if (b.ring) { scene.remove(b.ring); b.ring.geometry.dispose(); b.ring.material.dispose(); }
+      if (b.card) { scene.remove(b.card); b.card.geometry.dispose(); b.card.material.dispose(); }
       bursts.splice(i, 1);
     }
   }
@@ -490,6 +508,201 @@ function updateSpirits(dt, playerPos) {
 }
 
 /* ================================================================== *
+ * CARDS
+ * ------------------------------------------------------------------
+ * A recognised real object becomes a collectible card. The loop:
+ *   pinch/tap  -> summon a blank card into your hand
+ *   pinch/tap  -> throw it
+ *   it hits a recognised object -> capture animation -> card is minted
+ *     carrying that object's name, material stats and camera snapshot.
+ *
+ * Throwing reuses the orb physics body; only the payload and visuals differ,
+ * so collisions are already reported through physics.onImpact.
+ * ================================================================== */
+const collection = [];           // minted cards
+let heldCard = null;             // { mesh } floating in front of the player
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+/** Draws a real trading-card face onto a canvas. */
+function makeCardCanvas(data) {
+  const W = 340, H = 480;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+
+  const mat = data.materialId ? getMaterial(data.materialId) : null;
+  const accent = mat ? mat.accent : '#a98bff';
+
+  const g = c.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#161327');
+  g.addColorStop(1, '#0a0913');
+  roundRect(c, 6, 6, W - 12, H - 12, 26);
+  c.fillStyle = g; c.fill();
+  c.lineWidth = 4; c.strokeStyle = accent; c.stroke();
+
+  // artwork
+  roundRect(c, 26, 26, W - 52, 240, 16);
+  c.save(); c.clip();
+  if (data.thumb) {
+    c.drawImage(data.thumb, 26, 26, W - 52, 240);
+  } else {
+    c.fillStyle = '#201d33'; c.fillRect(26, 26, W - 52, 240);
+  }
+  c.restore();
+  c.lineWidth = 2; c.strokeStyle = accent + '99'; c.stroke();
+
+  c.textAlign = 'center';
+  c.fillStyle = '#ffffff';
+  c.font = '700 30px Cairo, system-ui, sans-serif';
+  c.fillText(data.name || 'مجهول', W / 2, 316);
+
+  if (mat) {
+    c.fillStyle = accent;
+    c.font = '700 22px Cairo, system-ui, sans-serif';
+    c.fillText(mat.label, W / 2, 352);
+  }
+
+  // stats
+  c.font = '600 18px ui-monospace, monospace';
+  c.textAlign = 'left';
+  c.fillStyle = '#b9b4d8';
+  if (mat) {
+    c.fillText(`ارتداد   ${mat.restitution.toFixed(2)}`, 40, 396);
+    c.fillText(`احتكاك  ${mat.friction.toFixed(2)}`, 40, 424);
+    c.fillText(`امتصاص ${mat.absorb.toFixed(2)}`, 40, 452);
+  }
+  if (data.score) {
+    c.textAlign = 'right';
+    c.fillStyle = accent;
+    c.fillText(`${Math.round(data.score * 100)}%`, W - 40, 396);
+  }
+
+  return cv;
+}
+
+function makeCardMesh(data) {
+  const tex = new THREE.CanvasTexture(makeCardCanvas(data));
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.15, 0.212),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })
+  );
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: HALO,
+    color: data.materialId ? getMaterial(data.materialId).color : 0xa98bff,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.5
+  }));
+  glow.scale.setScalar(0.34);
+  mesh.add(glow);
+  return mesh;
+}
+
+/** Blank card that has not captured anything yet. */
+function summonCard() {
+  if (heldCard) return;
+  const mesh = makeCardMesh({ name: 'بطاقة فارغة', materialId: null, score: 0 });
+  scene.add(mesh);
+  heldCard = { mesh, born: performance.now() };
+  playTone(660, 0.14, 'triangle', 0.18);
+  toast('بطاقة في يدك — اضغط مرة ثانية لرميها');
+}
+
+/** Keeps the held card floating just below the line of sight. */
+function updateHeldCard(dt) {
+  if (!heldCard) return;
+  const p = getPlayerPosition().clone();
+  const d = getPlayerDirection().clone().normalize();
+  const target = p.addScaledVector(d, 0.42);
+  target.y -= 0.13;
+
+  heldCard.mesh.position.lerp(target, 1 - Math.pow(0.0001, dt));
+  heldCard.mesh.lookAt(getPlayerPosition());
+  const t = (performance.now() - heldCard.born) / 1000;
+  heldCard.mesh.rotateZ(Math.sin(t * 2) * 0.06);
+}
+
+function throwHeldCard() {
+  if (!heldCard) return;
+  const p = heldCard.mesh.position.clone();
+  const d = getPlayerDirection().clone().normalize();
+
+  scene.remove(heldCard.mesh);
+  heldCard = null;
+
+  const orb = physics.spawnOrb(v3(p.x, p.y, p.z),
+    v3(d.x * 8.5, d.y * 8.5 + 0.5, d.z * 8.5), 0.06);
+  orb.payload = { kind: 'card' };
+
+  const mesh = makeCardMesh({ name: 'بطاقة', materialId: null, score: 0 });
+  scene.add(mesh);
+  orbMeshes.set(orb, { mesh, halo: null, isCard: true, spin: Math.random() * 6 + 6 });
+
+  playTone(520, 0.1, 'sawtooth', 0.16);
+}
+
+/** Mints a card from a recognised object and plays the capture flourish. */
+function mintCard(rec, atPos) {
+  const data = {
+    name: rec.name || getMaterial(rec.materialId).label,
+    materialId: rec.materialId,
+    score: rec.score || 0,
+    thumb: rec.thumb || null,
+    id: 'c' + (collection.length + 1) + '-' + Date.now()
+  };
+  collection.push(data);
+
+  // Flourish: the card blooms out of the object and fades upward.
+  const mesh = makeCardMesh(data);
+  mesh.position.set(atPos.x, atPos.y, atPos.z);
+  mesh.lookAt(getPlayerPosition());
+  mesh.scale.setScalar(0.2);
+  scene.add(mesh);
+  bursts.push({ card: mesh, life: 1.5, max: 1.5, from: mesh.position.clone() });
+
+  burst(atPos, getMaterial(rec.materialId).color, 30, 2.6, 0.9);
+  flash(0.55);
+  playTone(880, 0.16, 'triangle', 0.22);
+  setTimeout(() => playTone(1320, 0.22, 'triangle', 0.18), 130);
+
+  toast(`✦ بطاقة جديدة: ${data.name}`);
+  updateCardCount();
+}
+
+function updateCardCount() {
+  if (el.btnCards) {
+    el.btnCards.textContent = `بطاقاتي (${collection.length}) ▤`;
+    el.btnCards.style.display = 'inline-flex';
+  }
+}
+
+function openCollection() {
+  if (!el.cardsLayer) return;
+  el.cardsGrid.innerHTML = '';
+  if (!collection.length) {
+    el.cardsGrid.innerHTML =
+      '<p style="color:var(--muted);font-size:14.5px">لا بطاقات بعد. وسّم جسماً ليتعرّف عليه، ثم ارمِ بطاقة عليه.</p>';
+  } else {
+    for (const d of collection) {
+      const img = document.createElement('img');
+      img.src = makeCardCanvas(d).toDataURL('image/png');
+      img.className = 'cardimg';
+      img.alt = d.name;
+      el.cardsGrid.appendChild(img);
+    }
+  }
+  el.cardsLayer.hidden = false;
+}
+
+/* ================================================================== *
  * Orbs
  * ================================================================== */
 function launchOrb(origin, dir, power = 9.6) {
@@ -531,6 +744,14 @@ function syncOrbs() {
       continue;
     }
     vis.mesh.position.set(orb.pos.x, orb.pos.y, orb.pos.z);
+
+    // Thrown cards tumble instead of glowing.
+    if (vis.isCard) {
+      vis.mesh.rotation.x += 0.06 * vis.spin;
+      vis.mesh.rotation.y += 0.04 * vis.spin;
+      continue;
+    }
+
     // Charged orbs read cyan-hot; discharged ones dim to violet.
     const c = orb.charged ? 0x6fe3ff : 0xb69bff;
     vis.mesh.material.emissive.setHex(c);
@@ -572,7 +793,18 @@ function checkOrbHits() {
 /* ================================================================== *
  * Impact feedback — the moment the player feels the material
  * ================================================================== */
-physics.onImpact = ({ point, normal, material, speed }) => {
+physics.onImpact = ({ point, normal, material, speed, colliderId, orb }) => {
+  // A thrown card landing on a recognised object mints that object's card.
+  if (orb && orb.payload && orb.payload.kind === 'card' && colliderId) {
+    const rec = tagged.find((t) => t.collider.id === colliderId);
+    if (rec && !orb.payload.done) {
+      orb.payload.done = true;
+      orb.alive = false;
+      mintCard(rec, point);
+      return;
+    }
+  }
+
   if (speed < 0.5) return;
   playThud(material, speed / 3);
 
@@ -615,12 +847,18 @@ function updateHud() {
 
   const tagging = state.phase === 'tag';
   el.matbar.style.display = tagging ? 'flex' : 'none';
-  el.phaseChip.textContent = tagging ? 'وضع الوسم' : 'وضع اللعب';
+  el.phaseChip.textContent =
+    state.phase === 'tag' ? 'وضع الوسم' :
+    state.phase === 'collect' ? 'وضع البطاقات' : 'وضع اللعب';
 
   const soft = tagged.some((t) => getMaterial(t.materialId).nest);
   const rigid = tagged.some((t) => getMaterial(t.materialId).charges);
   el.btnPlay.disabled = !(soft && rigid);
   el.btnPlay.style.display = tagging ? 'inline-flex' : 'none';
+  if (el.btnCollect) {
+    el.btnCollect.style.display = tagging ? 'inline-flex' : 'none';
+    el.btnCollect.disabled = !tagged.length;
+  }
 }
 
 let toastTimer = null;
@@ -737,6 +975,30 @@ function getPlayerDirection() {
   return _pd;
 }
 
+/**
+ * One gesture, three meanings by phase. In card mode the first pinch summons
+ * and the second throws — the same gesture works for a phone tap and a Quest
+ * hand pinch, so no separate control scheme is needed.
+ */
+function onSelect() {
+  if (state.phase === 'tag') placeTagFromReticle();
+  else if (state.phase === 'collect') {
+    if (heldCard) throwHeldCard();
+    else summonCard();
+  } else if (state.phase === 'play') shoot();
+}
+
+function beginCollect() {
+  const named = tagged.filter((t) => t.name).length;
+  if (!tagged.length) { banner('وسّم جسماً واحداً على الأقل أولاً', 3200); return; }
+
+  state.phase = 'collect';
+  updateHud();
+  banner(named
+    ? 'اضغط لاستدعاء بطاقة، واضغط مرة ثانية لرميها على جسم تعرّف عليه'
+    : 'لم يتعرّف على أي جسم بعد — البطاقة تُصنع فقط من جسم معروف الاسم', 5200);
+}
+
 function shoot() {
   const p = getPlayerPosition().clone();
   const d = getPlayerDirection().clone().normalize();
@@ -842,7 +1104,8 @@ function bindSimControls() {
     if (!dragging) return;
     dragging = false;
     // A short, low-movement press is a shot, not a look.
-    if (moved < 12 && performance.now() - downT < 420 && state.phase === 'play') shoot();
+    if (moved < 12 && performance.now() - downT < 420 &&
+        (state.phase === 'play' || state.phase === 'collect')) onSelect();
   };
 
   el.canvas.addEventListener('pointerdown', (e) => down(e.clientX, e.clientY));
@@ -1035,15 +1298,63 @@ async function recogniseAndRetag(rec) {
   renderArStatus();
 
   const pct = Math.round(res.score * 100);
-
-  if (!res.material) {
-    toast(`رأى: ${res.label} (${pct}%) — لا مادة مطابقة`);
-    return;
-  }
   if (!tagged.includes(rec)) return;   // player already cleared the room
 
-  retagMaterial(rec, res.material);
-  toast(`${res.label} (${pct}%) → ${getMaterial(res.material).label}`);
+  // Remember the identity on the tag itself — this is what a card is minted
+  // from later, and what the floating name label shows.
+  rec.name = res.label;
+  rec.score = res.score;
+  rec.thumb = crop;
+
+  if (res.material) retagMaterial(rec, res.material);
+  attachNameLabel(rec);
+
+  toast(res.material
+    ? `${res.label} (${pct}%) → ${getMaterial(res.material).label}`
+    : `${res.label} (${pct}%) — لا مادة مطابقة`);
+}
+
+/**
+ * Floating name above a recognised object. Toasts disappear after two
+ * seconds, which is why the name sometimes seemed missing — the label is
+ * permanent and travels with the object.
+ */
+function attachNameLabel(rec) {
+  if (!rec.name) return;
+  if (rec.label) { rec.group.remove(rec.label); rec.label = null; }
+
+  const mat = getMaterial(rec.materialId);
+  const pad = 16, fs = 34;
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.font = `700 ${fs}px Cairo, system-ui, sans-serif`;
+  const txt = rec.name + (rec.score ? `  ${Math.round(rec.score * 100)}%` : '');
+  const tw = Math.ceil(probe.measureText(txt).width);
+
+  const cv = document.createElement('canvas');
+  cv.width = tw + pad * 2;
+  cv.height = fs + pad * 2;
+  const c = cv.getContext('2d');
+
+  roundRect(c, 0, 0, cv.width, cv.height, 16);
+  c.fillStyle = 'rgba(8,8,16,.82)'; c.fill();
+  c.lineWidth = 3; c.strokeStyle = mat.accent; c.stroke();
+
+  c.fillStyle = '#ffffff';
+  c.font = `700 ${fs}px Cairo, system-ui, sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText(txt, cv.width / 2, cv.height / 2 + 2);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthWrite: false
+  }));
+  const h = 0.075;
+  sp.scale.set(h * (cv.width / cv.height), h, 1);
+  sp.position.y = rec.collider.half.y + 0.14;
+  rec.group.add(sp);
+  rec.label = sp;
 }
 
 /** Swaps a placed tag's material in both the physics body and the visuals. */
@@ -1058,6 +1369,7 @@ function retagMaterial(rec, materialId) {
   rec.group.position.set(rec.collider.center.x, rec.collider.center.y, rec.collider.center.z);
   rec.group.rotation.y = rec.collider.yaw;
   scene.add(rec.group);
+  rec.label = null;            // rebuilt by attachNameLabel with new colours
 
   updateHud();
 }
@@ -1158,6 +1470,9 @@ async function startAR() {
     state.phase = 'tag';
     scene.background = null;      // passthrough needs a transparent clear
     renderer.setClearAlpha(0);
+    // Stereo AR renders the scene twice, so a device pixel ratio of 2 on a
+    // phone was a large part of the sluggish feel. 1.25 is plenty here.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     clearWorld();
 
     /**
@@ -1215,8 +1530,7 @@ async function startAR() {
     session.addEventListener('select', () => {
       // Ignore the select that accompanies a HUD button press.
       if (performance.now() - lastUiTouch < 350) return;
-      if (state.phase === 'tag') placeTagFromReticle();
-      else if (state.phase === 'play') shoot();
+      onSelect();
     });
 
     session.addEventListener('end', () => {
@@ -1403,6 +1717,7 @@ function loop(time, frame) {
   if (state.running) {
     physics.step(dt);
     syncOrbs();
+    updateHeldCard(dt);
 
     if (state.phase === 'play') {
       updateSpiritShields();
@@ -1453,6 +1768,8 @@ function clearWorld() {
 
   for (const t of tagged) scene.remove(t.group);
   tagged.length = 0;
+
+  if (heldCard) { scene.remove(heldCard.mesh); heldCard = null; }
 
   for (const b of bursts) {
     if (b.pts) scene.remove(b.pts);
@@ -1531,6 +1848,15 @@ el.btnPlay.addEventListener('click', (e) => { e.stopPropagation(); beginPlay(); 
 if (el.btnTestVision) {
   el.btnTestVision.style.display = 'none';   // AR only
   el.btnTestVision.addEventListener('click', (e) => { e.stopPropagation(); testVision(); });
+}
+if (el.btnCollect) {
+  el.btnCollect.addEventListener('click', (e) => { e.stopPropagation(); beginCollect(); });
+}
+if (el.btnCards) {
+  el.btnCards.addEventListener('click', (e) => { e.stopPropagation(); openCollection(); });
+}
+if (el.btnCardsClose) {
+  el.btnCardsClose.addEventListener('click', () => { el.cardsLayer.hidden = true; });
 }
 el.btnExit.addEventListener('click', (e) => {
   e.stopPropagation();

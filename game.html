@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="game.css?v=8">
+<link rel="stylesheet" href="game.css?v=9">
 
 <script type="importmap">
 {
@@ -48,8 +48,20 @@
     <div class="matbar" id="matbar"></div>
     <div class="chipset" style="justify-content:center">
       <button class="chip" id="btnTestVision" style="color:#6fe3ff">اختبر التعرف ◎</button>
+      <button class="chip" id="btnCards" style="color:#f0a95a;display:none">بطاقاتي (0) ▤</button>
+      <button class="chip" id="btnCollect" style="color:#a98bff">وضع البطاقات ✦</button>
       <button class="chip big" id="btnPlay" style="color:#7de08a" disabled>ابدأ الموجات ▸</button>
     </div>
+  </div>
+</div>
+
+<!-- ================================================== CARD COLLECTION -->
+<div class="layer" id="cardsLayer" hidden>
+  <div class="panel" style="max-width:640px">
+    <h2>بطاقاتي</h2>
+    <p>كل بطاقة صُنعت من جسم حقيقي تعرّفت عليه الكاميرا في غرفتك.</p>
+    <div id="cardsGrid" class="cardsgrid"></div>
+    <button class="btn primary wide" id="btnCardsClose" style="margin-top:18px">رجوع</button>
   </div>
 </div>
 
@@ -114,6 +126,6 @@
   </div>
 </div>
 
-<script type="module" src="game.js?v=8"></script>
+<script type="module" src="game.js?v=9"></script>
 </body>
 </html>

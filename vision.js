@@ -33,6 +33,16 @@ const LABEL_RULES = [
   { m: 'floor',  re: /tile|floor|parquet|linoleum|pavement/i }
 ];
 
+/**
+ * ImageNet labels arrive as comma-separated synonym lists
+ * ("television, television system"). Keep the first, shortest useful name so
+ * the UI always has a clean word to show.
+ */
+export function cleanLabel(label) {
+  if (!label) return '';
+  return String(label).split(',')[0].trim();
+}
+
 export function labelToMaterial(label) {
   if (!label) return null;
   for (const r of LABEL_RULES) if (r.re.test(label)) return r.m;
@@ -77,7 +87,7 @@ export class CameraReader {
    *
    * @returns {{canvas: HTMLCanvasElement, w: number, h: number}|null}
    */
-  capture(frame, refSpace) {
+  capture(frame, refSpace, zoom = 0.55, outSize = 224) {
     const gl = this.gl;
     if (!this.binding) { this.lastError = 'لا يوجد ربط WebGL'; return null; }
 
@@ -118,23 +128,36 @@ export class CameraReader {
         return null;
       }
 
-      const pixels = new Uint8Array(w * h * 4);
-      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      /**
+       * Read ONLY the central square, not the whole frame. A full 1920x1080
+       * readPixels moves ~8 MB across the GL boundary every capture and was
+       * the main source of the stutter; the centre crop is ~15x smaller.
+       */
+      const side = Math.max(32, Math.floor(Math.min(w, h) * zoom));
+      const x0 = Math.floor((w - side) / 2);
+      const y0 = Math.floor((h - side) / 2);
 
-      this.canvas.width = w;
-      this.canvas.height = h;
-      const img = this.ctx.createImageData(w, h);
+      const pixels = new Uint8Array(side * side * 4);
+      gl.readPixels(x0, y0, side, side, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-      // GL origin is bottom-left, canvas is top-left: flip vertically.
-      const rowBytes = w * 4;
-      for (let y = 0; y < h; y++) {
-        const src = (h - 1 - y) * rowBytes;
+      // Stage at native crop size, flipping GL's bottom-left origin.
+      this.canvas.width = side;
+      this.canvas.height = side;
+      const img = this.ctx.createImageData(side, side);
+      const rowBytes = side * 4;
+      for (let y = 0; y < side; y++) {
+        const src = (side - 1 - y) * rowBytes;
         img.data.set(pixels.subarray(src, src + rowBytes), y * rowBytes);
       }
       this.ctx.putImageData(img, 0, 0);
 
+      // Scale down to the classifier's input size in one draw.
+      const out = document.createElement('canvas');
+      out.width = out.height = outSize;
+      out.getContext('2d').drawImage(this.canvas, 0, 0, side, side, 0, 0, outSize, outSize);
+
       this.lastError = null;
-      return { canvas: this.canvas, w, h };
+      return { canvas: out, w: outSize, h: outSize, side };
     } catch (e) {
       this.lastError = 'readPixels: ' + ((e && e.message) || e);
       return null;
@@ -143,18 +166,9 @@ export class CameraReader {
     }
   }
 
-  /**
-   * Crops the central square of a capture — the hit-test ray runs through
-   * the middle of the view, so the tagged object is centred.
-   */
-  cropCentre(src, size = 224, zoom = 0.55) {
-    const out = document.createElement('canvas');
-    out.width = out.height = size;
-    const side = Math.floor(Math.min(src.w, src.h) * zoom);
-    const sx = Math.floor((src.w - side) / 2);
-    const sy = Math.floor((src.h - side) / 2);
-    out.getContext('2d').drawImage(src.canvas, sx, sy, side, side, 0, 0, size, size);
-    return out;
+  /** Kept for compatibility — capture() already returns a centred crop. */
+  cropCentre(src) {
+    return src.canvas;
   }
 }
 
@@ -180,7 +194,8 @@ export class Recognizer {
 
     try {
       const mod = await import(/* @vite-ignore */ CDN);
-      const { pipeline, env } = mod;
+      const { pipeline, env, RawImage } = mod;
+      this.RawImage = RawImage;
 
       env.allowLocalModels = false;
       env.useBrowserCache = true;
@@ -217,7 +232,16 @@ export class Recognizer {
   async classify(canvas) {
     if (!this.ready) return null;
     try {
-      const out = await this.pipe(canvas.toDataURL('image/jpeg', 0.9), { top_k: 5 });
+      // Feed pixels straight in. toDataURL() base64-encodes the whole image
+      // on the main thread and was a needless stall on every capture.
+      let input;
+      if (this.RawImage && this.RawImage.fromCanvas) {
+        input = this.RawImage.fromCanvas(canvas);
+      } else {
+        input = canvas.toDataURL('image/jpeg', 0.85);
+      }
+
+      const out = await this.pipe(input, { top_k: 5 });
       if (!out || !out.length) return null;
 
       // Prefer the highest-scoring label we can actually map to a material.
@@ -227,7 +251,13 @@ export class Recognizer {
         if (m) { chosen = { ...c, material: m }; break; }
       }
       const best = chosen || { ...out[0], material: null };
-      return { label: best.label, score: best.score, material: best.material, all: out };
+      return {
+        label: cleanLabel(best.label),
+        rawLabel: best.label,
+        score: best.score,
+        material: best.material,
+        all: out
+      };
     } catch (e) {
       this.error = (e && e.message) || String(e);
       console.error('classify failed', e);
