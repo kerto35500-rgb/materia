@@ -860,16 +860,41 @@ function makeReticle() {
 async function startAR() {
   if (!navigator.xr) { toast('هذا المتصفح لا يدعم WebXR'); return; }
 
-  let session;
-  try {
-    session = await navigator.xr.requestSession('immersive-ar', {
+  let session = null;
+
+  // Attempt 1: everything we want. Attempt 2: bare minimum, so a device that
+  // rejects one optional/required feature still gets into AR rather than
+  // failing silently.
+  const attempts = [
+    {
       requiredFeatures: ['hit-test', 'local'],
       optionalFeatures: ['dom-overlay', 'plane-detection', 'anchors', 'light-estimation'],
       domOverlay: { root: document.body }
-    });
-  } catch (err) {
-    toast('تعذّر بدء جلسة الواقع المعزّز');
-    console.error(err);
+    },
+    {
+      requiredFeatures: ['local'],
+      optionalFeatures: ['hit-test', 'dom-overlay'],
+      domOverlay: { root: document.body }
+    }
+  ];
+
+  for (const opts of attempts) {
+    try {
+      session = await navigator.xr.requestSession('immersive-ar', opts);
+      break;
+    } catch (err) {
+      diag.sessionError = (err && (err.name + ': ' + err.message)) || String(err);
+      console.error('requestSession failed', opts, err);
+    }
+  }
+
+  if (!session) {
+    el.arNote.innerHTML =
+      '<b style="color:#ff8f8f">فشل بدء جلسة الواقع المعزّز.</b><br>' +
+      'الجهاز أبلغ أنه يدعمها لكنه رفض بدءها. أعد تحميل الصفحة وتأكد من ' +
+      'السماح بصلاحية الكاميرا، وأن ARCore محدّث.' + diagLine();
+    el.arNote.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('تعذّر بدء الجلسة — اقرأ التفاصيل بالأسفل');
     return;
   }
 
@@ -884,8 +909,18 @@ async function startAR() {
   await renderer.xr.setSession(session);
 
   localSpace = await session.requestReferenceSpace('local');
-  const viewerSpace = await session.requestReferenceSpace('viewer');
-  hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+  // Hit-testing may be unavailable (attempt 2 above). Degrade gracefully
+  // instead of throwing: tags then get placed a fixed distance ahead.
+  try {
+    const viewerSpace = await session.requestReferenceSpace('viewer');
+    if (session.requestHitTestSource) {
+      hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+    }
+  } catch (err) {
+    hitTestSource = null;
+    console.warn('hit-test unavailable, using fixed-distance placement', err);
+  }
 
   makeReticle();
 
@@ -912,12 +947,20 @@ async function startAR() {
 }
 
 function placeTagFromReticle() {
-  if (!reticle || !reticle.visible) { toast('وجّه على سطح مستوٍ أولاً'); return; }
-
   const p = new THREE.Vector3();
   const q = new THREE.Quaternion();
   const s = new THREE.Vector3();
-  reticle.matrix.decompose(p, q, s);
+
+  if (reticle && reticle.visible) {
+    reticle.matrix.decompose(p, q, s);
+  } else if (!hitTestSource) {
+    // No hit-testing on this device: drop the tag 1.2 m ahead of the camera.
+    p.copy(getPlayerPosition()).addScaledVector(getPlayerDirection(), 1.2);
+    q.identity();
+  } else {
+    toast('وجّه على سطح مستوٍ أولاً');
+    return;
+  }
 
   if (!arFloorSet) {
     state.floorY = p.y;
@@ -1145,7 +1188,11 @@ function startSim() {
 
 bindSimControls();
 
-el.btnAR.addEventListener('click', () => { audio(); startAR(); });
+el.btnAR.addEventListener('click', () => {
+  audio();
+  if (!diag.supported) { showArHelp(); return; }
+  startAR();
+});
 el.btnSim.addEventListener('click', () => { audio(); startSim(); });
 el.btnPlay.addEventListener('click', (e) => { e.stopPropagation(); beginPlay(); });
 el.btnExit.addEventListener('click', (e) => {
@@ -1161,28 +1208,100 @@ el.btnRetry.addEventListener('click', () => {
 });
 el.btnHome.addEventListener('click', () => { window.location.href = 'index.html'; });
 
-/* ---------------------------------------------- capability detection */
+/* ================================================================== *
+ * Capability detection + self-diagnosis
+ * ------------------------------------------------------------------
+ * A disabled button that does nothing when tapped tells the player
+ * nothing. So the AR button stays tappable always, and explains the
+ * exact failing condition instead of silently ignoring the tap.
+ * ================================================================== */
+const diag = {
+  secure: false,
+  hasXR: false,
+  supported: false,
+  checkError: null,
+  sessionError: null,
+  ua: navigator.userAgent
+};
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isAndroid() { return /Android/i.test(navigator.userAgent); }
+
+/** Human-readable reason AR is unavailable, plus the concrete fix. */
+function arHelpHtml() {
+  if (!diag.secure) {
+    return '<b>السبب: الصفحة ليست على HTTPS.</b><br>' +
+           'الواقع المعزّز يتطلب اتصالاً آمناً. افتح الموقع عبر رابط https.';
+  }
+  if (!diag.hasXR) {
+    if (isIOS()) {
+      return '<b>السبب: هذا جهاز Apple.</b><br>' +
+             'متصفح Safari لا يوفّر <code>WebXR</code> للواقع المعزّز حتى الآن، ' +
+             'ولا يمكن لأي متصفح على iOS تجاوز ذلك. استخدم وضع المحاكاة.';
+    }
+    return '<b>السبب: هذا المتصفح لا يدعم WebXR إطلاقاً.</b><br>' +
+           'على أندرويد استخدم <b>Google Chrome</b> (مو متصفح سامسونج أو براوزر آخر). ' +
+           'على نظارة Quest استخدم متصفح Meta.';
+  }
+  if (!diag.supported) {
+    if (isAndroid()) {
+      return '<b>السبب: جهازك يدعم WebXR لكن ليس جلسة الواقع المعزّز.</b><br><br>' +
+             'على أندرويد هذا يعني غالباً أن تطبيق <b>«خدمات Google Play للواقع المعزّز»</b> ' +
+             '(ARCore) غير مثبّت أو غير محدّث. ثبّته من متجر Play ثم أعد تحميل الصفحة:<br>' +
+             '<a href="https://play.google.com/store/apps/details?id=com.google.ar.core" ' +
+             'target="_blank" rel="noopener" style="color:#6fe3ff">تثبيت ARCore من متجر Play</a>' +
+             '<br><br>إذا كان مثبّتاً فعلاً، فجهازك قد لا يكون من الأجهزة المعتمدة لـ ARCore، ' +
+             'وفي هذي الحالة الواقع المعزّز لن يعمل عليه نهائياً.' +
+             (diag.checkError ? `<br><br><small>رسالة الفحص: ${diag.checkError}</small>` : '');
+    }
+    return '<b>السبب: المتصفح يدعم WebXR لكنه لا يوفّر جلسة واقع معزّز.</b><br>' +
+           'أنت على كمبيوتر على الأغلب — الواقع المعزّز يحتاج جوال أندرويد أو نظارة.' +
+           (diag.checkError ? `<br><br><small>رسالة الفحص: ${diag.checkError}</small>` : '');
+  }
+  return '<b>مدعوم.</b>';
+}
+
+/** Compact technical readout the player can screenshot and send. */
+function diagLine() {
+  return `<small style="opacity:.75;display:block;margin-top:12px;direction:ltr;text-align:left;font-family:ui-monospace,monospace">` +
+         `secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
+         (diag.sessionError ? ` · err=${diag.sessionError}` : '') +
+         `</small>`;
+}
+
+function showArHelp() {
+  el.arNote.innerHTML = arHelpHtml() + diagLine();
+  el.arNote.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('الواقع المعزّز غير متاح — اقرأ السبب بالأسفل');
+}
+
 (async function detect() {
-  let ok = false;
-  if (navigator.xr && navigator.xr.isSessionSupported) {
-    try { ok = await navigator.xr.isSessionSupported('immersive-ar'); } catch { ok = false; }
+  diag.secure = window.isSecureContext;
+  diag.hasXR = !!(navigator.xr && navigator.xr.isSessionSupported);
+
+  if (diag.hasXR) {
+    try {
+      diag.supported = await navigator.xr.isSessionSupported('immersive-ar');
+    } catch (e) {
+      diag.supported = false;
+      diag.checkError = (e && (e.name + ': ' + e.message)) || String(e);
+    }
   }
 
-  const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-  if (ok) {
-    el.btnAR.disabled = false;
+  if (diag.supported) {
     el.btnAR.classList.add('rec');
-    el.arNote.innerHTML = '✓ جهازك يدعم الواقع المعزّز الكامل.';
+    el.arNote.innerHTML = '✓ جهازك يدعم الواقع المعزّز الكامل — اضغط الزر لتدخل غرفتك.' + diagLine();
   } else {
-    el.btnAR.disabled = true;
+    // Deliberately NOT disabled: tapping must explain itself.
+    el.btnAR.classList.add('dim');
     el.btnSim.classList.add('rec');
-    el.arNote.innerHTML = isiOS
-      ? '<b>آيفون/آيباد:</b> Safari لا يوفّر الواقع المعزّز في المتصفح. استخدم وضع المحاكاة — نفس الفيزياء تماماً.'
-      : !window.isSecureContext
-        ? '<b>تنبيه:</b> الصفحة بدون HTTPS، والواقع المعزّز يتطلب اتصالاً آمناً.'
-        : '<b>غير مدعوم:</b> استخدم Chrome على أندرويد أو متصفح Quest، أو جرّب المحاكاة.';
+    el.arNote.innerHTML =
+      '<b style="color:#f0a95a">الواقع المعزّز غير متاح على هذا الجهاز.</b> ' +
+      'اضغط الزر لمعرفة السبب بالتفصيل، أو استخدم وضع المحاكاة.' + diagLine();
   }
 
   // Idle render so the menu is not a black void.

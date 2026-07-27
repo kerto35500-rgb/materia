@@ -84,6 +84,10 @@ canvas#gl { position: fixed; inset: 0; display: block; width: 100%; height: 100%
 .mode:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(255,255,255,.3); }
 .mode:disabled { opacity: .42; cursor: not-allowed; }
 
+/* Unavailable but still tappable — tapping explains why. */
+.mode.dim { opacity: .62; }
+.mode.dim .mi { background: rgba(240,169,90,.14); border-color: rgba(240,169,90,.3); }
+
 .mode .mi {
   width: 44px; height: 44px; flex: none;
   border-radius: 13px;
@@ -106,7 +110,17 @@ canvas#gl { position: fixed; inset: 0; display: block; width: 100%; height: 100%
   margin-top: 18px;
   padding-top: 16px;
   line-height: 1.7;
+  text-align: right;
 }
+.note code {
+  background: rgba(255,255,255,.09);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 12px;
+  direction: ltr;
+  display: inline-block;
+}
+.note a { text-decoration: underline; }
 .note b { color: var(--hot); }
 
 .btn {
