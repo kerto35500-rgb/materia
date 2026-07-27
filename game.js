@@ -21,14 +21,14 @@ import * as THREE from 'three';
 import { MATERIALS, MATERIAL_ORDER, getMaterial, materialFromSemanticLabel } from './materials.js';
 import { PhysicsWorld, BoxCollider, PlaneCollider, v3, segPointDist2 } from './physics.js';
 import {
-  CameraReader, Recognizer, labelToMaterial,
-  adoptEndpointFromUrl, getCloudEndpoint
+  CameraReader, Recognizer, labelToMaterial, metaLabelInfo,
+  adoptEndpointFromUrl, getCloudEndpoint, probeCamera
 } from './vision.js';
 
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 12;
+const BUILD = 14;
 
 /** Picks up ?api=… once and remembers it for the cloud engine. */
 const cloudEndpoint = adoptEndpointFromUrl();
@@ -64,6 +64,8 @@ const el = {
   btnTestVision: $('btnTestVision'),
   btnCollect: $('btnCollect'),
   btnCards: $('btnCards'),
+  btnProbe: $('btnProbe'),
+  probeOut: $('probeOut'),
   cardsLayer: $('cardsLayer'),
   cardsGrid: $('cardsGrid'),
   btnCardsClose: $('btnCardsClose'),
@@ -551,11 +553,11 @@ const ui3d = {
  * silently disappeared. Buttons cannot be swallowed.
  */
 const UI_ACTIONS = [
+  { id: 'scan' },
+  { id: 'roomsetup' },
   { id: 'material' },
   { id: 'tag' },
   { id: 'card' },
-  { id: 'test' },
-  { id: 'engine' },
   { id: 'cards' },
   { id: 'play' },
   { id: 'recenter' },
@@ -564,6 +566,8 @@ const UI_ACTIONS = [
 
 function uiRowLabel(i) {
   switch (UI_ACTIONS[i].id) {
+    case 'scan':      return `أجسام الغرفة (${roomScanCount})  ⟳`;
+    case 'roomsetup': return 'إعداد الغرفة  ⚙';
     case 'material': return `المادة:  ${getMaterial(state.activeMaterial).label}`;
     case 'tag':      return 'وسم السطح المستهدف  ◈';
     case 'card':     return heldCard ? 'ارمِ البطاقة  ➤' : 'استدعِ بطاقة  ✦';
@@ -581,8 +585,6 @@ function uiRowLabel(i) {
 
 function uiRowEnabled(i) {
   const id = UI_ACTIONS[i].id;
-  if (id === 'test') return cameraReader.available;
-  if (id === 'engine') return !!getCloudEndpoint();
   if (id === 'tag') return vision.surface || !hitTestSource;
   if (id === 'cards') return collection.length > 0;
   if (id === 'play') {
@@ -613,17 +615,15 @@ function drawUI3D() {
 
   c.font = '600 21px Cairo, system-ui, sans-serif';
   const lines = [
-    ['سطح', vision.surface ? '✓ مكتشف' : '✗ غير موجود', vision.surface ? '#7de08a' : '#ff9d9d'],
-    ['كاميرا', cameraReader.available ? '✓ متاحة' : '✗ غير متاحة',
-      cameraReader.available ? '#7de08a' : '#ff9d9d'],
-    ['نموذج',
-      vision.model === 'ready' ? `✓ جاهز · ${recognizer.engine === 'cloud' ? 'سحابي' : 'CLIP'}` :
-      vision.model === 'loading' ? `⏳ ${vision.pct}%` :
-      vision.model === 'error' ? '✗ فشل' : '— لم يبدأ',
-      vision.model === 'ready' ? '#7de08a' : vision.model === 'error' ? '#ff9d9d' : '#f0a95a'],
-    ['تعرّف',
-      vision.lastLabel ? `${vision.lastLabel} ${Math.round(vision.lastScore * 100)}%` : '— لا شيء',
-      vision.lastLabel ? '#6fe3ff' : '#9b97b8']
+    ['الغرفة',
+      roomScanCount ? `✓ ${roomScanCount} جسم معروف` : '✗ لا أجسام معرّفة',
+      roomScanCount ? '#7de08a' : '#f0a95a'],
+    ['سطح', vision.surface ? '✓ مكتشف' : '✗ غير موجود',
+      vision.surface ? '#7de08a' : '#ff9d9d'],
+    ['بطاقات', `${collection.length}`, '#f0a95a'],
+    ['كاميرا',
+      cameraReader.available ? '✓ متاحة' : '✗ غير متاحة في النظارة',
+      cameraReader.available ? '#7de08a' : '#9b97b8']
   ];
   lines.forEach((ln, i) => {
     const y = 88 + i * 30;
@@ -825,11 +825,8 @@ function pressUI3D() {
       if (heldCard) throwHeldCard();
       else summonCard();
       break;
-    case 'test': testVision(); break;
-    case 'engine':
-      recognizer.engine = recognizer.engine === 'cloud' ? 'clip' : 'cloud';
-      toast(recognizer.engine === 'cloud' ? 'المحرك: سحابي' : 'المحرك: محلي');
-      break;
+    case 'scan': rescanRoom(); break;
+    case 'roomsetup': setupRoom(); break;
     case 'cards': toggleCards3D(); break;
     case 'play': beginPlay(); break;
     case 'recenter': recenterUI3D(); toast('تم تمركز اللوحة'); break;
@@ -2056,43 +2053,111 @@ function updateHitTest(frame) {
  * This is the zero-tap path: on hardware that labels planes as "couch" or
  * "table" we map straight into a material bucket with no player input.
  */
+/**
+ * Reads the headset's own room model. This is the identification path for a
+ * headset: Room Setup already named the couch, the desk, the screen, and the
+ * browser hands those labels to us through plane detection. No camera, no
+ * model download, no API key — and more reliable than any image classifier,
+ * because the labels came from the user.
+ */
 const seenPlanes = new WeakSet();
+let roomScanCount = 0;
+
+function planeFootprint(plane) {
+  let ex = 0.3, ez = 0.3;
+  if (plane.polygon && plane.polygon.length) {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const pt of plane.polygon) {
+      minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
+      minZ = Math.min(minZ, pt.z); maxZ = Math.max(maxZ, pt.z);
+    }
+    ex = Math.max(0.10, Math.min(2.2, (maxX - minX) / 2));
+    ez = Math.max(0.10, Math.min(2.2, (maxZ - minZ) / 2));
+  }
+  return { ex, ez };
+}
+
 function harvestPlanes(frame) {
-  if (!frame.detectedPlanes || state.phase !== 'tag') return;
+  if (!frame.detectedPlanes || !localSpace) return;
+
+  let added = 0;
   frame.detectedPlanes.forEach((plane) => {
     if (seenPlanes.has(plane)) return;
     seenPlanes.add(plane);
 
-    const label = plane.semanticLabel || plane.semanticType;
-    const matId = materialFromSemanticLabel(label);
-    if (!matId) return;
+    const raw = plane.semanticLabel || plane.semanticType || 'other';
+    const info = metaLabelInfo(raw);
+    // Unknown labels still become solid geometry — better than ignoring them.
+    const matId = (info && info.m) || 'hard';
+    const arName = (info && info.ar) || String(raw);
 
     const pose = frame.getPose(plane.planeSpace, localSpace);
     if (!pose) return;
 
-    // Approximate the polygon extent with an axis-aligned footprint.
-    let ex = 0.3, ez = 0.3;
-    if (plane.polygon && plane.polygon.length) {
-      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-      for (const pt of plane.polygon) {
-        minX = Math.min(minX, pt.x); maxX = Math.max(maxX, pt.x);
-        minZ = Math.min(minZ, pt.z); maxZ = Math.max(maxZ, pt.z);
-      }
-      ex = Math.max(0.12, Math.min(1.6, (maxX - minX) / 2));
-      ez = Math.max(0.12, Math.min(1.6, (maxZ - minZ) / 2));
-    }
-
+    const { ex, ez } = planeFootprint(plane);
     const t = pose.transform.position;
+    const o = pose.transform.orientation;
     const yaw = new THREE.Euler().setFromQuaternion(
-      new THREE.Quaternion(
-        pose.transform.orientation.x, pose.transform.orientation.y,
-        pose.transform.orientation.z, pose.transform.orientation.w
-      ), 'YXZ'
+      new THREE.Quaternion(o.x, o.y, o.z, o.w), 'YXZ'
     ).y;
 
-    addTagged({ x: t.x, y: t.y + 0.06, z: t.z }, { x: ex, y: 0.06, z: ez }, matId, yaw);
-    toast(`تعرّف تلقائي: ${getMaterial(matId).label}`);
+    // Walls/floors get a thin slab; furniture tops get a little body.
+    const thin = /جدار|أرضية|سقف|نافذة|باب|لوحة|سبورة|مرآة/.test(arName);
+    const half = { x: ex, y: thin ? 0.03 : 0.07, z: ez };
+
+    const rec = addTagged(
+      { x: t.x, y: t.y + half.y, z: t.z }, half, matId, yaw
+    );
+    if (!rec) return;
+
+    rec.name = arName;
+    rec.score = 1;                 // the headset asserted this, not a guess
+    attachNameLabel(rec);
+    added++;
   });
+
+  if (added) {
+    roomScanCount += added;
+    vision.lastLabel = `الغرفة: ${roomScanCount} جسم`;
+    vision.lastScore = 1;
+    vision.lastMaterial = null;
+    toast(`تعرّفت النظارة على ${added} جسماً من غرفتك`);
+    updateHud();
+  }
+}
+
+/** Re-reads the room, forgetting nothing already placed. */
+function rescanRoom() {
+  if (!renderer.xr.isPresenting) { toast('داخل الجلسة فقط'); return; }
+  toast('يقرأ نموذج غرفتك…');
+  // harvestPlanes runs every frame; this just reports the current total.
+  setTimeout(() => {
+    if (!roomScanCount) {
+      banner('لا توجد أجسام معرّفة. استخدم «إعداد الغرفة ⚙» لتسمية أثاثك.', 5200);
+    } else {
+      banner(`غرفتك تحتوي ${roomScanCount} جسماً معروفاً`, 3600);
+    }
+  }, 1200);
+}
+
+/**
+ * Triggers the headset's Room Setup from inside the session. Meta allows this
+ * only once per session, which is why it is a deliberate button.
+ */
+async function setupRoom() {
+  const s = renderer.xr.getSession();
+  if (!s) return;
+  if (typeof s.initiateRoomCapture !== 'function') {
+    banner('هذا الجهاز لا يدعم إعداد الغرفة من داخل الجلسة', 4200);
+    return;
+  }
+  try {
+    banner('سمِّ أثاثك في إعداد الغرفة، ثم ارجع', 5000);
+    await s.initiateRoomCapture();
+    toast('تم — يقرأ الأجسام الآن');
+  } catch (e) {
+    banner('تعذّر بدء إعداد الغرفة: ' + ((e && e.message) || e), 4200);
+  }
 }
 
 /* ================================================================== *
@@ -2263,6 +2328,50 @@ if (el.btnCards) {
 }
 if (el.btnCardsClose) {
   el.btnCardsClose.addEventListener('click', () => { el.cardsLayer.hidden = true; });
+}
+
+/**
+ * Reports what getUserMedia actually does on THIS device. This is the one
+ * remaining route to a camera image in a headset, and forum posts contradict
+ * each other, so we measure instead of assuming.
+ */
+if (el.btnProbe) {
+  el.btnProbe.addEventListener('click', async () => {
+    el.probeOut.hidden = false;
+    el.probeOut.innerHTML = 'يفحص… (اسمح بالكاميرا إن طُلب منك)';
+
+    const p = await probeCamera();
+    const ok = (b) => b ? '<b style="color:#7de08a">نعم</b>' : '<b style="color:#ff9d9d">لا</b>';
+
+    let verdict;
+    if (p.gotStream) {
+      verdict = '<b style="color:#7de08a">✓ الكاميرا متاحة عبر getUserMedia — ' +
+                'التعرف بالصورة ممكن على هذا الجهاز.</b>';
+    } else if (!p.secure) {
+      verdict = '<b style="color:#ff9d9d">✗ الصفحة ليست HTTPS.</b>';
+    } else if (p.videoInputs === 0) {
+      verdict = '<b style="color:#f0a95a">✗ لا يوجد أي مدخل فيديو — ' +
+                'النظام لا يعرض الكاميرا للمتصفح إطلاقاً.</b>';
+    } else {
+      verdict = '<b style="color:#ff9d9d">✗ رُفض الوصول للكاميرا.</b>';
+    }
+
+    el.probeOut.innerHTML = `
+      ${verdict}
+      <div style="margin-top:10px;font-size:12.5px;direction:ltr;text-align:left;
+                  font-family:ui-monospace,monospace;line-height:1.8">
+        secure=${p.secure} · mediaDevices=${!!p.hasMediaDevices}<br>
+        videoInputs=${p.videoInputs} · stream=${p.gotStream}
+        ${p.gotStream ? ` · ${p.width}x${p.height}` : ''}<br>
+        ${p.label ? 'track=' + p.label + '<br>' : ''}
+        ${p.error ? 'error=' + p.error + '<br>' : ''}
+        ${p.devices.length ? 'devices=' + p.devices.join(' | ') : 'devices=(none listed)'}
+      </div>
+      <div style="margin-top:8px;font-size:12.5px">
+        شغّل هذا الفحص <b>داخل نافذة متصفح Quest العادية</b> قبل الدخول للواقع المعزّز —
+        هناك أعلى احتمال لعمل الكاميرا. ${ok(p.gotStream)}
+      </div>`;
+  });
 }
 el.btnExit.addEventListener('click', (e) => {
   e.stopPropagation();

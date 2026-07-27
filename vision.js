@@ -104,6 +104,65 @@ const EN_TO_OBJ = new Map(OBJECTS.map((o) => [o.en, o]));
 export const CANDIDATES = OBJECTS.map((o) => o.en);
 
 /* ------------------------------------------------------------------ *
+ * Headset room model  →  Arabic name + material
+ * ------------------------------------------------------------------
+ * Meta's own docs are explicit: "There is no way to get to the pixels of the
+ * passthrough content." So image recognition is impossible in the Quest
+ * browser — but it is also unnecessary. Room Setup already labelled the
+ * furniture, and the browser exposes those labels through plane detection.
+ * The headset tells us "couch"; we only translate and assign physics.
+ */
+export const META_LABELS = {
+  // horizontal furniture
+  table:            { ar: 'طاولة',        m: 'hard' },
+  desk:             { ar: 'مكتب',         m: 'hard' },
+  couch:            { ar: 'كنبة',         m: 'soft' },
+  sofa:             { ar: 'كنبة',         m: 'soft' },
+  bed:              { ar: 'سرير',         m: 'soft' },
+  storage:          { ar: 'خزانة',        m: 'hard' },
+  shelf:            { ar: 'رف',           m: 'hard' },
+  cabinet:          { ar: 'دولاب',        m: 'hard' },
+  lamp:             { ar: 'أباجورة',      m: 'glass' },
+  plant:            { ar: 'نبات',         m: 'soft' },
+
+  // structure
+  floor:            { ar: 'أرضية',        m: 'floor' },
+  ceiling:          { ar: 'سقف',          m: 'hard' },
+  wall:             { ar: 'جدار',         m: 'hard' },
+  'wall face':      { ar: 'جدار',         m: 'hard' },
+  door:             { ar: 'باب',          m: 'hard' },
+  'door frame':     { ar: 'باب',          m: 'hard' },
+  window:           { ar: 'نافذة',        m: 'glass' },
+  'window frame':   { ar: 'نافذة',        m: 'glass' },
+  'invisible wall face': { ar: 'جدار',    m: 'hard' },
+
+  // screens & art
+  screen:           { ar: 'تلفاز',        m: 'glass' },
+  'wall art':       { ar: 'لوحة',         m: 'hard' },
+  whiteboard:       { ar: 'سبورة',        m: 'hard' },
+  mirror:           { ar: 'مرآة',         m: 'glass' },
+
+  other:            { ar: 'جسم',          m: 'hard' },
+  global_mesh:      { ar: 'هيكل الغرفة',  m: 'hard' }
+};
+
+/**
+ * @returns {{ar:string, m:string}|null} translation + material for a headset
+ * semantic label, tolerating vendor spelling differences.
+ */
+export function metaLabelInfo(label) {
+  if (!label) return null;
+  const k = String(label).toLowerCase().trim().replace(/_/g, ' ');
+  if (META_LABELS[k]) return META_LABELS[k];
+  if (META_LABELS[k.replace(/ /g, '_')]) return META_LABELS[k.replace(/ /g, '_')];
+  for (const key of Object.keys(META_LABELS)) {
+    if (k.includes(key)) return META_LABELS[key];
+  }
+  const m = labelToMaterial(k);
+  return m ? { ar: k, m } : null;
+}
+
+/* ------------------------------------------------------------------ *
  * Label -> material bucket (fallback for non zero-shot engines)
  * ------------------------------------------------------------------
  * The classifier returns ImageNet-1k style labels ("television",
@@ -137,7 +196,120 @@ export function labelToMaterial(label) {
 }
 
 /* ------------------------------------------------------------------ *
- * Camera frame capture
+ * Camera probe — getUserMedia, entirely outside WebXR
+ * ------------------------------------------------------------------
+ * WebXR's `camera-access` is blocked in the Quest browser. But getUserMedia
+ * is a completely separate path — the one video calls use. Sources disagree
+ * about whether it exposes anything on a headset, so instead of trusting a
+ * forum post this reports exactly what THIS device does, with the real error.
+ *
+ * If it yields frames, image recognition in the headset is solved: capture,
+ * send, done. If it does not, we have a definitive answer.
+ */
+export async function probeCamera() {
+  const out = {
+    hasMediaDevices: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+    secure: window.isSecureContext,
+    devices: [],
+    videoInputs: 0,
+    gotStream: false,
+    width: 0,
+    height: 0,
+    label: null,
+    error: null
+  };
+
+  if (!out.hasMediaDevices) {
+    out.error = 'mediaDevices غير موجود';
+    return out;
+  }
+
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    out.devices = list.map((d) => `${d.kind}:${d.label || '(بلا اسم)'}`);
+    out.videoInputs = list.filter((d) => d.kind === 'videoinput').length;
+  } catch (e) {
+    out.error = 'enumerateDevices: ' + ((e && e.message) || e);
+  }
+
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 } },
+      audio: false
+    });
+    const track = stream.getVideoTracks()[0];
+    const s = track ? track.getSettings() : {};
+    out.gotStream = true;
+    out.width = s.width || 0;
+    out.height = s.height || 0;
+    out.label = track ? track.label : null;
+  } catch (e) {
+    out.error = (e && (e.name + ': ' + e.message)) || String(e);
+  } finally {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+  }
+
+  return out;
+}
+
+/**
+ * A live camera the game can grab stills from, independent of WebXR.
+ * Used by the 2D scan screen.
+ */
+export class MediaCamera {
+  constructor() {
+    this.stream = null;
+    this.video = null;
+    this.error = null;
+  }
+
+  async start() {
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 } },
+        audio: false
+      });
+      const v = document.createElement('video');
+      v.autoplay = true;
+      v.playsInline = true;
+      v.muted = true;
+      v.srcObject = this.stream;
+      await v.play().catch(() => {});
+      this.video = v;
+      return true;
+    } catch (e) {
+      this.error = (e && (e.name + ': ' + e.message)) || String(e);
+      return false;
+    }
+  }
+
+  stop() {
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video = null;
+  }
+
+  get ready() {
+    return !!(this.video && this.video.videoWidth);
+  }
+
+  /** Centre crop of the current frame, sized for a classifier. */
+  grab(size = 224, zoom = 0.6) {
+    if (!this.ready) return null;
+    const vw = this.video.videoWidth, vh = this.video.videoHeight;
+    const side = Math.floor(Math.min(vw, vh) * zoom);
+    const sx = Math.floor((vw - side) / 2);
+    const sy = Math.floor((vh - side) / 2);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(this.video, sx, sy, side, side, 0, 0, size, size);
+    return c;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Camera frame capture (inside WebXR)
  * ------------------------------------------------------------------ */
 export class CameraReader {
   constructor(gl) {

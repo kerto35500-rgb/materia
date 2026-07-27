@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="game.css?v=12">
+<link rel="stylesheet" href="game.css?v=14">
 
 <script type="importmap">
 {
@@ -100,6 +100,11 @@
 
     <div class="note" id="arNote">جاري فحص قدرات الجهاز…</div>
 
+    <button class="btn wide" id="btnProbe" style="margin-top:12px;font-size:15px">
+      افحص كاميرا هذا الجهاز  ◎
+    </button>
+    <div class="note" id="probeOut" hidden></div>
+
     <div class="note" style="border-top:none;padding-top:8px">
       <b>التحكم:</b> في المحاكاة اسحب للنظر واضغط ضغطة قصيرة للرمي (أو مفتاح المسافة).
       في الواقع المعزّز وجّه الجوال واضغط على الشاشة.
@@ -126,6 +131,6 @@
   </div>
 </div>
 
-<script type="module" src="game.js?v=12"></script>
+<script type="module" src="game.js?v=14"></script>
 </body>
 </html>
