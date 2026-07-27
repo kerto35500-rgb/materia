@@ -20,11 +20,12 @@
 import * as THREE from 'three';
 import { MATERIALS, MATERIAL_ORDER, getMaterial, materialFromSemanticLabel } from './materials.js';
 import { PhysicsWorld, BoxCollider, PlaneCollider, v3, segPointDist2 } from './physics.js';
+import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
 
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 6;
+const BUILD = 7;
 
 /* ================================================================== *
  * DOM
@@ -861,6 +862,87 @@ let reticle = null;
 let arFloorSet = false;
 let lastUiTouch = 0;
 
+/* ---------------------------------------------- object recognition */
+const cameraReader = new CameraReader(renderer.getContext());
+const recognizer = new Recognizer((msg) => banner(msg, 2600));
+
+/**
+ * The camera texture only exists inside the XR frame callback, so a tag tap
+ * queues a request here and the next frame fulfils it.
+ */
+let captureRequest = null;   // { resolve }
+
+function requestCapture() {
+  return new Promise((resolve) => {
+    captureRequest = { resolve };
+    // Never hang the caller if no frame delivers a camera image.
+    setTimeout(() => {
+      if (captureRequest && captureRequest.resolve === resolve) {
+        captureRequest = null;
+        resolve(null);
+      }
+    }, 1200);
+  });
+}
+
+function serviceCapture(frame) {
+  if (!captureRequest || !localSpace) return;
+  const req = captureRequest;
+  captureRequest = null;
+  const shot = cameraReader.capture(frame, localSpace);
+  req.resolve(shot ? cameraReader.cropCentre(shot) : null);
+}
+
+/**
+ * Places a provisional tag immediately (so the game stays responsive), then
+ * upgrades its material once recognition finishes. Recognition is best-effort:
+ * any failure just leaves the manually chosen material in place.
+ */
+async function recogniseAndRetag(rec) {
+  if (!cameraReader.available) return;
+
+  const crop = await requestCapture();
+  if (!crop) {
+    toast('تعذّر قراءة الكاميرا: ' + (cameraReader.lastError || 'غير معروف'));
+    return;
+  }
+
+  if (!recognizer.ready) {
+    const ok = await recognizer.load();
+    if (!ok) { toast('فشل النموذج: ' + (recognizer.error || '')); return; }
+  }
+
+  const res = await recognizer.classify(crop);
+  if (!res) { toast('لم يتعرّف على الجسم'); return; }
+
+  const pct = Math.round(res.score * 100);
+
+  if (!res.material) {
+    toast(`رأى: ${res.label} (${pct}%) — لا مادة مطابقة`);
+    return;
+  }
+  if (!tagged.includes(rec)) return;   // player already cleared the room
+
+  retagMaterial(rec, res.material);
+  toast(`${res.label} (${pct}%) → ${getMaterial(res.material).label}`);
+}
+
+/** Swaps a placed tag's material in both the physics body and the visuals. */
+function retagMaterial(rec, materialId) {
+  if (rec.materialId === materialId) return;
+  rec.materialId = materialId;
+  rec.collider.material = materialId;
+
+  const half = rec.collider.half;
+  scene.remove(rec.group);
+  rec.group = makeTaggedVisual(materialId, half);
+  rec.group.position.set(rec.collider.center.x, rec.collider.center.y, rec.collider.center.z);
+  rec.group.rotation.y = rec.collider.yaw;
+  scene.add(rec.group);
+
+  updateHud();
+}
+
 function makeReticle() {
   const g = new THREE.RingGeometry(0.07, 0.09, 34).rotateX(-Math.PI / 2);
   const m = new THREE.MeshBasicMaterial({
@@ -923,7 +1005,15 @@ async function startAR() {
     const attempts = [
       {
         requiredFeatures: ['hit-test', 'local'],
-        optionalFeatures: ['dom-overlay', 'plane-detection', 'anchors', 'light-estimation'],
+        optionalFeatures: [
+          'dom-overlay', 'plane-detection', 'anchors',
+          'light-estimation', 'camera-access'
+        ],
+        domOverlay: { root: document.body }
+      },
+      {
+        requiredFeatures: ['hit-test', 'local'],
+        optionalFeatures: ['dom-overlay', 'camera-access'],
         domOverlay: { root: document.body }
       },
       {
@@ -990,6 +1080,14 @@ async function startAR() {
       hitTestSource = null;
       console.warn('hit-test unavailable, using fixed-distance placement', err);
     }
+
+    step = 'camera';
+    // Recognition is a bonus, never a requirement: if camera-access was not
+    // granted the game still runs with manual tagging.
+    cameraReader.attach(session);
+    diag.camera = cameraReader.available;
+    // Warm the model up in the background so the first tag is not slow.
+    if (cameraReader.available) recognizer.load();
 
     step = 'scene';
     makeReticle();
@@ -1079,12 +1177,18 @@ function placeTagFromReticle() {
   const half = presets[mid] || presets.hard;
 
   const yaw = new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
-  addTagged({ x: p.x, y: p.y + half.y, z: p.z }, half, mid, yaw);
+  const rec = addTagged({ x: p.x, y: p.y + half.y, z: p.z }, half, mid, yaw);
 
   const m = getMaterial(mid);
   ripple(v3(p.x, p.y + 0.01, p.z), v3(0, 1, 0), m.color);
   playThud(m, 1.1);
-  toast(`تم وسم: ${m.label}`);
+
+  if (rec && cameraReader.available) {
+    toast('يتعرّف على الجسم…');
+    recogniseAndRetag(rec);      // fire and forget; upgrades the tag when done
+  } else {
+    toast(`تم وسم: ${m.label}`);
+  }
 }
 
 function updateHitTest(frame) {
@@ -1160,6 +1264,8 @@ function loop(time, frame) {
   lastT = now;
 
   if (frame) {
+    // Camera pixels must be read inside the frame callback.
+    serviceCapture(frame);
     updateHitTest(frame);
     harvestPlanes(frame);
   }
@@ -1318,6 +1424,7 @@ const diag = {
   checkError: null,
   sessionError: null,
   refSpace: null,
+  camera: null,
   ua: navigator.userAgent
 };
 
@@ -1367,6 +1474,7 @@ function diagLine() {
   return `<small style="opacity:.75;display:block;margin-top:12px;direction:ltr;text-align:left;font-family:ui-monospace,monospace">` +
          `build=${BUILD} · secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
          (diag.refSpace ? ` · space=${diag.refSpace}` : '') +
+         (diag.camera !== null ? ` · cam=${diag.camera}` : '') +
          (diag.sessionError ? ` · err=${diag.sessionError}` : '') +
          `</small>`;
 }
