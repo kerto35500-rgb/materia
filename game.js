@@ -24,7 +24,7 @@ import { PhysicsWorld, BoxCollider, PlaneCollider, v3, segPointDist2 } from './p
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 5;
+const BUILD = 6;
 
 /* ================================================================== *
  * DOM
@@ -951,11 +951,33 @@ async function startAR() {
     renderer.setClearAlpha(0);
     clearWorld();
 
+    /**
+     * three.js defaults its reference space to 'local-floor', and many
+     * handheld AR devices reject that type outright — setSession() then
+     * throws NotSupportedError from requestReferenceSpace. 'local' and
+     * 'viewer' are the types guaranteed for immersive sessions, and 'local'
+     * is what we asked for in requiredFeatures, so try those in order.
+     */
     step = 'setSession';
-    await renderer.xr.setSession(session);
+    let attached = false;
+    for (const rs of ['local', 'viewer']) {
+      try {
+        renderer.xr.setReferenceSpaceType(rs);
+        await renderer.xr.setSession(session);
+        diag.refSpace = rs;
+        attached = true;
+        break;
+      } catch (err) {
+        diag.sessionError = `[setSession/${rs}] ` +
+          ((err && (err.name + ': ' + err.message)) || String(err));
+        console.error('setSession failed with reference space', rs, err);
+      }
+    }
+    if (!attached) throw new Error('لا يدعم الجهاز أي نظام إحداثيات مناسب');
 
+    // Use the same space type that actually attached.
     step = 'referenceSpace';
-    localSpace = await session.requestReferenceSpace('local');
+    localSpace = await session.requestReferenceSpace(diag.refSpace || 'local');
 
     // Hit-testing is optional: degrade to fixed-distance placement.
     step = 'hitTest';
@@ -1295,6 +1317,7 @@ const diag = {
   supported: false,
   checkError: null,
   sessionError: null,
+  refSpace: null,
   ua: navigator.userAgent
 };
 
@@ -1343,6 +1366,7 @@ function arHelpHtml() {
 function diagLine() {
   return `<small style="opacity:.75;display:block;margin-top:12px;direction:ltr;text-align:left;font-family:ui-monospace,monospace">` +
          `build=${BUILD} · secure=${diag.secure} · xr=${diag.hasXR} · ar=${diag.supported}` +
+         (diag.refSpace ? ` · space=${diag.refSpace}` : '') +
          (diag.sessionError ? ` · err=${diag.sessionError}` : '') +
          `</small>`;
 }
