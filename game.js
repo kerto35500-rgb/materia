@@ -25,7 +25,7 @@ import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 10;
+const BUILD = 11;
 
 /* ================================================================== *
  * DOM
@@ -519,10 +519,10 @@ function updateSpirits(dt, playerPos) {
  * UV, the UV gives a canvas row, the row is the button. Far less code and
  * nothing to keep in sync.
  * ================================================================== */
-const UI_W = 520, UI_H = 690;      // canvas pixels
-const UI_TOP = 210;                // status block height
+const UI_W = 520, UI_H = 810;      // canvas pixels
+const UI_TOP = 238;                // status block height
 const UI_ROW = 68;                 // row height
-const UI_ROWS = 7;
+const UI_ROWS = 8;
 
 const ui3d = {
   root: null,
@@ -539,10 +539,16 @@ const ui3d = {
   msg: 'وجّه على سطح واضغط لوسمه'
 };
 
+/**
+ * Every action is an explicit row. Relying on the pinch gesture alone was a
+ * mistake: the panel swallows any pinch whose ray crosses it, so gestures
+ * silently disappeared. Buttons cannot be swallowed.
+ */
 const UI_ACTIONS = [
   { id: 'material' },
+  { id: 'tag' },
+  { id: 'card' },
   { id: 'test' },
-  { id: 'collect' },
   { id: 'cards' },
   { id: 'play' },
   { id: 'recenter' },
@@ -552,8 +558,9 @@ const UI_ACTIONS = [
 function uiRowLabel(i) {
   switch (UI_ACTIONS[i].id) {
     case 'material': return `المادة:  ${getMaterial(state.activeMaterial).label}`;
+    case 'tag':      return 'وسم السطح المستهدف  ◈';
+    case 'card':     return heldCard ? 'ارمِ البطاقة  ➤' : 'استدعِ بطاقة  ✦';
     case 'test':     return 'اختبر التعرف  ◎';
-    case 'collect':  return state.phase === 'collect' ? 'رجوع للوسم  ◂' : 'وضع البطاقات  ✦';
     case 'cards':    return `بطاقاتي (${collection.length})  ▤`;
     case 'play':     return 'ابدأ الموجات  ▸';
     case 'recenter': return 'أعد تمركز اللوحة  ↺';
@@ -565,7 +572,8 @@ function uiRowLabel(i) {
 function uiRowEnabled(i) {
   const id = UI_ACTIONS[i].id;
   if (id === 'test') return cameraReader.available;
-  if (id === 'collect') return tagged.length > 0;
+  if (id === 'tag') return vision.surface || !hitTestSource;
+  if (id === 'cards') return collection.length > 0;
   if (id === 'play') {
     return tagged.some((t) => getMaterial(t.materialId).nest) &&
            tagged.some((t) => getMaterial(t.materialId).charges);
@@ -613,6 +621,16 @@ function drawUI3D() {
     c.fillStyle = ln[2];
     c.fillText(ln[1], UI_W - 130, y);
   });
+
+  // Say plainly what a pinch will do right now — the gesture was ambiguous.
+  c.font = '700 20px Cairo, system-ui, sans-serif';
+  c.fillStyle = '#6fe3ff';
+  const pinch = ui3d.hover >= 0
+    ? `القرصة: اضغط «${uiRowLabel(ui3d.hover).split('  ')[0]}»`
+    : heldCard ? 'القرصة: ارمِ البطاقة'
+    : state.phase === 'play' ? 'القرصة: ارمِ كرة'
+    : 'القرصة: وسم السطح المستهدف';
+  c.fillText(pinch, UI_W - 26, 220);
 
   // Toasts and banners are DOM elements and therefore invisible in a headset,
   // so the latest message is mirrored here.
@@ -712,15 +730,30 @@ function recenterUI3D() {
 const _ray = new THREE.Raycaster();
 const _m4 = new THREE.Matrix4();
 
-/** XR controllers double as hand target-rays, so one path covers both. */
-function getPointers() {
-  const out = [];
-  if (!renderer.xr.isPresenting) return out;
+/**
+ * XR controllers double as hand target-rays, so one path covers both.
+ *
+ * They MUST be added to the scene: three.js writes the pose into
+ * controller.matrix, but matrixWorld is only recomputed for objects that are
+ * part of the scene graph. Without this the ray silently fired from the world
+ * origin instead of the player's hand.
+ */
+const pointers = [];
+function setupPointers() {
+  pointers.length = 0;
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
-    if (c && c.visible !== false) out.push(c);
+    c.userData.connected = false;
+    c.addEventListener('connected', () => { c.userData.connected = true; });
+    c.addEventListener('disconnected', () => { c.userData.connected = false; });
+    scene.add(c);
+    pointers.push(c);
   }
-  return out;
+}
+
+function getPointers() {
+  if (!renderer.xr.isPresenting) return [];
+  return pointers.filter((c) => c.userData.connected);
 }
 
 function updateUI3D() {
@@ -775,11 +808,13 @@ function pressUI3D() {
       toast(`المادة: ${getMaterial(state.activeMaterial).label}`);
       break;
     }
-    case 'test': testVision(); break;
-    case 'collect':
-      if (state.phase === 'collect') { state.phase = 'tag'; updateHud(); toast('وضع الوسم'); }
-      else beginCollect();
+    case 'tag': placeTagFromReticle(); break;
+    case 'card':
+      // Summoning works in any phase — no hidden mode to discover first.
+      if (heldCard) throwHeldCard();
+      else summonCard();
       break;
+    case 'test': testVision(); break;
     case 'cards': toggleCards3D(); break;
     case 'play': beginPlay(); break;
     case 'recenter': recenterUI3D(); toast('تم تمركز اللوحة'); break;
@@ -1309,11 +1344,12 @@ function onSelect() {
   // The in-world panel gets first refusal on every select.
   if (pressUI3D()) return;
 
+  // Holding a card always means "throw it", whatever the phase.
+  if (heldCard) { throwHeldCard(); return; }
+
   if (state.phase === 'tag') placeTagFromReticle();
-  else if (state.phase === 'collect') {
-    if (heldCard) throwHeldCard();
-    else summonCard();
-  } else if (state.phase === 'play') shoot();
+  else if (state.phase === 'collect') summonCard();
+  else if (state.phase === 'play') shoot();
 }
 
 function beginCollect() {
@@ -1855,6 +1891,7 @@ async function startAR() {
 
     step = 'scene';
     makeReticle();
+    setupPointers();
 
     session.addEventListener('select', () => {
       // Ignore the select that accompanies a HUD button press.
