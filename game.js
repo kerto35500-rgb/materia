@@ -1292,6 +1292,9 @@ function showArHelp() {
     }
   }
 
+  // Always tappable, whatever the outcome.
+  el.btnAR.disabled = false;
+
   if (diag.supported) {
     el.btnAR.classList.add('rec');
     el.arNote.innerHTML = '✓ جهازك يدعم الواقع المعزّز الكامل — اضغط الزر لتدخل غرفتك.' + diagLine();
