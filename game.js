@@ -58,8 +58,26 @@ const el = {
 /* ================================================================== *
  * Renderer / scene
  * ================================================================== */
+/**
+ * The GL context is created explicitly with `xrCompatible: true`.
+ * Otherwise three.js has to call gl.makeXRCompatible() inside setSession(),
+ * which rejects on a number of Android devices — and that rejection is what
+ * silently killed AR startup after the session had already been created.
+ */
+const glAttribs = {
+  alpha: true,
+  antialias: true,
+  depth: true,
+  stencil: false,
+  xrCompatible: true,
+  powerPreference: 'high-performance'
+};
+const glCtx = el.canvas.getContext('webgl2', glAttribs) ||
+              el.canvas.getContext('webgl', glAttribs);
+
 const renderer = new THREE.WebGLRenderer({
   canvas: el.canvas,
+  context: glCtx || undefined,
   antialias: true,
   alpha: true,
   powerPreference: 'high-performance'
@@ -857,93 +875,146 @@ function makeReticle() {
   reticle.add(inner);
 }
 
+/** Guards against a second tap while a request is still in flight. */
+let arStarting = false;
+
+function showArFailure(step) {
+  el.arNote.innerHTML =
+    '<b style="color:#ff8f8f">فشل بدء جلسة الواقع المعزّز.</b><br>' +
+    `توقّف عند الخطوة: <code>${step}</code><br>` +
+    'أعد تحميل الصفحة ثم اضغط الزر مرة واحدة فقط، وتأكد من السماح بصلاحية الكاميرا.' +
+    diagLine();
+  el.arNote.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('تعذّر بدء الجلسة — اقرأ التفاصيل بالأسفل');
+}
+
+/**
+ * Every step after requestSession is inside the try block on purpose.
+ * A throw there used to escape as an unhandled rejection, leaving a live
+ * XRSession with no UI attached — the session was running but nothing was
+ * drawn, and the next tap then failed with InvalidStateError. Now any
+ * failure is named, reported, and the session is always torn down.
+ */
 async function startAR() {
-  if (!navigator.xr) { toast('هذا المتصفح لا يدعم WebXR'); return; }
+  if (arStarting) return;
+  arStarting = true;
 
   let session = null;
+  let step = 'init';
 
-  // Attempt 1: everything we want. Attempt 2: bare minimum, so a device that
-  // rejects one optional/required feature still gets into AR rather than
-  // failing silently.
-  const attempts = [
-    {
-      requiredFeatures: ['hit-test', 'local'],
-      optionalFeatures: ['dom-overlay', 'plane-detection', 'anchors', 'light-estimation'],
-      domOverlay: { root: document.body }
-    },
-    {
-      requiredFeatures: ['local'],
-      optionalFeatures: ['hit-test', 'dom-overlay'],
-      domOverlay: { root: document.body }
-    }
-  ];
-
-  for (const opts of attempts) {
-    try {
-      session = await navigator.xr.requestSession('immersive-ar', opts);
-      break;
-    } catch (err) {
-      diag.sessionError = (err && (err.name + ': ' + err.message)) || String(err);
-      console.error('requestSession failed', opts, err);
-    }
-  }
-
-  if (!session) {
-    el.arNote.innerHTML =
-      '<b style="color:#ff8f8f">فشل بدء جلسة الواقع المعزّز.</b><br>' +
-      'الجهاز أبلغ أنه يدعمها لكنه رفض بدءها. أعد تحميل الصفحة وتأكد من ' +
-      'السماح بصلاحية الكاميرا، وأن ARCore محدّث.' + diagLine();
-    el.arNote.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    toast('تعذّر بدء الجلسة — اقرأ التفاصيل بالأسفل');
-    return;
-  }
-
-  state.mode = 'ar';
-  state.phase = 'tag';
-  // Passthrough requires a fully transparent clear — a leftover background
-  // colour from a previous simulator run would hide the real world.
-  scene.background = null;
-  renderer.setClearAlpha(0);
-  clearWorld();
-
-  await renderer.xr.setSession(session);
-
-  localSpace = await session.requestReferenceSpace('local');
-
-  // Hit-testing may be unavailable (attempt 2 above). Degrade gracefully
-  // instead of throwing: tags then get placed a fixed distance ahead.
   try {
-    const viewerSpace = await session.requestReferenceSpace('viewer');
-    if (session.requestHitTestSource) {
-      hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+    if (!navigator.xr) throw new Error('WebXR غير مدعوم');
+
+    // Kill any leftover session from a previous failed attempt.
+    step = 'cleanup';
+    const zombie = renderer.xr.getSession();
+    if (zombie) {
+      try { await zombie.end(); } catch { /* already dead */ }
+      await new Promise((r) => setTimeout(r, 250));
     }
+
+    // Attempt 1: everything we want. Attempt 2: bare minimum, so a device
+    // that rejects one feature still gets in. Only retried while no session
+    // exists — retrying after one was created is what caused InvalidStateError.
+    step = 'requestSession';
+    const attempts = [
+      {
+        requiredFeatures: ['hit-test', 'local'],
+        optionalFeatures: ['dom-overlay', 'plane-detection', 'anchors', 'light-estimation'],
+        domOverlay: { root: document.body }
+      },
+      {
+        requiredFeatures: ['local'],
+        optionalFeatures: ['hit-test', 'dom-overlay'],
+        domOverlay: { root: document.body }
+      }
+    ];
+
+    for (const opts of attempts) {
+      try {
+        session = await navigator.xr.requestSession('immersive-ar', opts);
+        break;
+      } catch (err) {
+        diag.sessionError = (err && (err.name + ': ' + err.message)) || String(err);
+        console.error('requestSession failed', opts, err);
+      }
+    }
+    if (!session) throw new Error('رفض الجهاز بدء الجلسة');
+
+    // From here on a session exists: any failure must end it.
+    state.mode = 'ar';
+    state.phase = 'tag';
+    scene.background = null;      // passthrough needs a transparent clear
+    renderer.setClearAlpha(0);
+    clearWorld();
+
+    step = 'setSession';
+    await renderer.xr.setSession(session);
+
+    step = 'referenceSpace';
+    localSpace = await session.requestReferenceSpace('local');
+
+    // Hit-testing is optional: degrade to fixed-distance placement.
+    step = 'hitTest';
+    try {
+      const viewerSpace = await session.requestReferenceSpace('viewer');
+      if (session.requestHitTestSource) {
+        hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+      }
+    } catch (err) {
+      hitTestSource = null;
+      console.warn('hit-test unavailable, using fixed-distance placement', err);
+    }
+
+    step = 'scene';
+    makeReticle();
+
+    session.addEventListener('select', () => {
+      // Ignore the select that accompanies a HUD button press.
+      if (performance.now() - lastUiTouch < 350) return;
+      if (state.phase === 'tag') placeTagFromReticle();
+      else if (state.phase === 'play') shoot();
+    });
+
+    session.addEventListener('end', () => {
+      hitTestSource = null;
+      if (state.phase !== 'over') resetToMenu();
+    });
+
+    step = 'ui';
+    el.start.hidden = true;
+    el.hud.hidden = false;
+    el.cross.hidden = true;
+    buildMatBar();
+    updateHud();
+    banner('وجّه جوالك على سطح ثم اضغط لوسمه — تحتاج سطحاً طرياً وسطحاً صلباً', 5200);
+    state.running = true;
+    renderer.setAnimationLoop(loop);
   } catch (err) {
-    hitTestSource = null;
-    console.warn('hit-test unavailable, using fixed-distance placement', err);
+    diag.sessionError = `[${step}] ` +
+      ((err && (err.name + ': ' + err.message)) || String(err));
+    console.error('startAR failed at', step, err);
+
+    // Never leave a live session behind with no UI attached.
+    try {
+      const s = renderer.xr.getSession() || session;
+      if (s) await s.end();
+    } catch { /* ignore */ }
+
+    renderer.setAnimationLoop(null);
+    state.running = false;
+    state.mode = null;
+    state.phase = 'idle';
+    renderer.setClearAlpha(1);
+    scene.background = new THREE.Color(0x0a0a14);
+    el.start.hidden = false;
+    el.hud.hidden = true;
+    renderer.setAnimationLoop(() => renderer.render(scene, camera));
+
+    showArFailure(step);
+  } finally {
+    arStarting = false;
   }
-
-  makeReticle();
-
-  session.addEventListener('select', () => {
-    // Ignore the select that accompanies a HUD button press.
-    if (performance.now() - lastUiTouch < 350) return;
-    if (state.phase === 'tag') placeTagFromReticle();
-    else if (state.phase === 'play') shoot();
-  });
-
-  session.addEventListener('end', () => {
-    hitTestSource = null;
-    if (state.phase !== 'over') resetToMenu();
-  });
-
-  el.start.hidden = true;
-  el.hud.hidden = false;
-  el.cross.hidden = true;
-  buildMatBar();
-  updateHud();
-  banner('وجّه جوالك على سطح ثم اضغط لوسمه — تحتاج سطحاً طرياً وسطحاً صلباً', 5200);
-  state.running = true;
-  renderer.setAnimationLoop(loop);
 }
 
 function placeTagFromReticle() {
