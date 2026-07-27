@@ -20,12 +20,18 @@
 import * as THREE from 'three';
 import { MATERIALS, MATERIAL_ORDER, getMaterial, materialFromSemanticLabel } from './materials.js';
 import { PhysicsWorld, BoxCollider, PlaneCollider, v3, segPointDist2 } from './physics.js';
-import { CameraReader, Recognizer, labelToMaterial } from './vision.js';
+import {
+  CameraReader, Recognizer, labelToMaterial,
+  adoptEndpointFromUrl, getCloudEndpoint
+} from './vision.js';
 
 const MAX_TAGGED = 26;
 
 /** Bumped on every deploy so the running build is identifiable on-screen. */
-const BUILD = 11;
+const BUILD = 12;
+
+/** Picks up ?api=… once and remembers it for the cloud engine. */
+const cloudEndpoint = adoptEndpointFromUrl();
 
 /* ================================================================== *
  * DOM
@@ -519,10 +525,10 @@ function updateSpirits(dt, playerPos) {
  * UV, the UV gives a canvas row, the row is the button. Far less code and
  * nothing to keep in sync.
  * ================================================================== */
-const UI_W = 520, UI_H = 810;      // canvas pixels
+const UI_W = 520, UI_H = 878;      // canvas pixels
 const UI_TOP = 238;                // status block height
 const UI_ROW = 68;                 // row height
-const UI_ROWS = 8;
+const UI_ROWS = 9;
 
 const ui3d = {
   root: null,
@@ -549,6 +555,7 @@ const UI_ACTIONS = [
   { id: 'tag' },
   { id: 'card' },
   { id: 'test' },
+  { id: 'engine' },
   { id: 'cards' },
   { id: 'play' },
   { id: 'recenter' },
@@ -561,6 +568,9 @@ function uiRowLabel(i) {
     case 'tag':      return 'وسم السطح المستهدف  ◈';
     case 'card':     return heldCard ? 'ارمِ البطاقة  ➤' : 'استدعِ بطاقة  ✦';
     case 'test':     return 'اختبر التعرف  ◎';
+    case 'engine':   return recognizer.engine === 'cloud'
+                       ? 'المحرك:  سحابي ☁'
+                       : 'المحرك:  محلي CLIP';
     case 'cards':    return `بطاقاتي (${collection.length})  ▤`;
     case 'play':     return 'ابدأ الموجات  ▸';
     case 'recenter': return 'أعد تمركز اللوحة  ↺';
@@ -572,6 +582,7 @@ function uiRowLabel(i) {
 function uiRowEnabled(i) {
   const id = UI_ACTIONS[i].id;
   if (id === 'test') return cameraReader.available;
+  if (id === 'engine') return !!getCloudEndpoint();
   if (id === 'tag') return vision.surface || !hitTestSource;
   if (id === 'cards') return collection.length > 0;
   if (id === 'play') {
@@ -606,7 +617,7 @@ function drawUI3D() {
     ['كاميرا', cameraReader.available ? '✓ متاحة' : '✗ غير متاحة',
       cameraReader.available ? '#7de08a' : '#ff9d9d'],
     ['نموذج',
-      vision.model === 'ready' ? '✓ جاهز' :
+      vision.model === 'ready' ? `✓ جاهز · ${recognizer.engine === 'cloud' ? 'سحابي' : 'CLIP'}` :
       vision.model === 'loading' ? `⏳ ${vision.pct}%` :
       vision.model === 'error' ? '✗ فشل' : '— لم يبدأ',
       vision.model === 'ready' ? '#7de08a' : vision.model === 'error' ? '#ff9d9d' : '#f0a95a'],
@@ -815,6 +826,10 @@ function pressUI3D() {
       else summonCard();
       break;
     case 'test': testVision(); break;
+    case 'engine':
+      recognizer.engine = recognizer.engine === 'cloud' ? 'clip' : 'cloud';
+      toast(recognizer.engine === 'cloud' ? 'المحرك: سحابي' : 'المحرك: محلي');
+      break;
     case 'cards': toggleCards3D(); break;
     case 'play': beginPlay(); break;
     case 'recenter': recenterUI3D(); toast('تم تمركز اللوحة'); break;
@@ -1518,6 +1533,9 @@ const recognizer = new Recognizer((msg) => {
   else if (msg.includes('تحميل')) vision.model = 'loading';
   renderArStatus();
 });
+
+// If a proxy is configured, prefer it — that is why the user set it.
+if (cloudEndpoint) recognizer.engine = 'cloud';
 
 const ST = (cls, txt) => `<span class="val ${cls}">${txt}</span>`;
 

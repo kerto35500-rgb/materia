@@ -17,7 +17,94 @@
  */
 
 /* ------------------------------------------------------------------ *
- * Label -> material bucket
+ * Household vocabulary for zero-shot recognition
+ * ------------------------------------------------------------------
+ * ImageNet-1k spends most of its 1000 classes on dog breeds, fungi and fish,
+ * and has very few household surfaces. A zero-shot CLIP model instead scores
+ * the image against OUR list, so it cannot answer "mushroom" for a sofa.
+ *
+ * Each entry carries its material directly — no keyword guessing at all.
+ */
+export const OBJECTS = [
+  // soft
+  { ar: 'مخدة',        en: 'a pillow',                     m: 'soft' },
+  { ar: 'كنبة',        en: 'a sofa or couch',              m: 'soft' },
+  { ar: 'كرسي مريح',   en: 'an upholstered armchair',      m: 'soft' },
+  { ar: 'سرير',        en: 'a bed',                        m: 'soft' },
+  { ar: 'مرتبة',       en: 'a mattress',                   m: 'soft' },
+  { ar: 'بطانية',      en: 'a blanket or duvet',           m: 'soft' },
+  { ar: 'وسادة أرضية', en: 'a floor cushion',              m: 'soft' },
+  { ar: 'ستارة',       en: 'a curtain',                    m: 'soft' },
+  { ar: 'منشفة',       en: 'a towel',                      m: 'soft' },
+  { ar: 'ملابس',       en: 'a pile of clothes',            m: 'soft' },
+  { ar: 'دمية',        en: 'a plush stuffed toy',          m: 'soft' },
+  { ar: 'حقيبة قماش',  en: 'a fabric bag or backpack',     m: 'soft' },
+
+  // carpet
+  { ar: 'سجادة',       en: 'a rug or carpet',              m: 'carpet' },
+  { ar: 'سجادة صلاة',  en: 'a prayer mat',                 m: 'carpet' },
+  { ar: 'موكيت',       en: 'wall to wall carpeting',       m: 'carpet' },
+  { ar: 'دعاسة',       en: 'a doormat',                    m: 'carpet' },
+
+  // hard
+  { ar: 'طاولة',       en: 'a table',                      m: 'hard' },
+  { ar: 'طاولة قهوة',  en: 'a coffee table',               m: 'hard' },
+  { ar: 'مكتب',        en: 'a desk',                       m: 'hard' },
+  { ar: 'كرسي خشب',    en: 'a wooden chair',               m: 'hard' },
+  { ar: 'خزانة',       en: 'a wardrobe or cabinet',        m: 'hard' },
+  { ar: 'رف كتب',      en: 'a bookshelf with books',       m: 'hard' },
+  { ar: 'كتاب',        en: 'a book',                       m: 'hard' },
+  { ar: 'درج',         en: 'a chest of drawers',           m: 'hard' },
+  { ar: 'باب',         en: 'a door',                       m: 'hard' },
+  { ar: 'جدار',        en: 'a plain wall',                 m: 'hard' },
+  { ar: 'صندوق',       en: 'a cardboard box',              m: 'hard' },
+  { ar: 'لوحة جدارية', en: 'a framed picture on a wall',   m: 'hard' },
+  { ar: 'كرتون',       en: 'a wooden crate',               m: 'hard' },
+  { ar: 'سلة',         en: 'a woven basket',               m: 'hard' },
+  { ar: 'نبات',        en: 'a potted houseplant',          m: 'hard' },
+  { ar: 'طبلية',       en: 'a nightstand',                 m: 'hard' },
+  { ar: 'بيانو',       en: 'a piano',                      m: 'hard' },
+  { ar: 'سلّم',        en: 'a ladder',                     m: 'hard' },
+
+  // glass / screens
+  { ar: 'تلفاز',       en: 'a television screen',          m: 'glass' },
+  { ar: 'شاشة كمبيوتر', en: 'a computer monitor',          m: 'glass' },
+  { ar: 'لابتوب',      en: 'a laptop computer',            m: 'glass' },
+  { ar: 'جوال',        en: 'a smartphone',                 m: 'glass' },
+  { ar: 'تابلت',       en: 'a tablet computer',            m: 'glass' },
+  { ar: 'نافذة',       en: 'a window with glass',          m: 'glass' },
+  { ar: 'مرآة',        en: 'a mirror',                     m: 'glass' },
+  { ar: 'طاولة زجاج',  en: 'a glass top table',            m: 'glass' },
+  { ar: 'كوب',         en: 'a drinking glass',             m: 'glass' },
+  { ar: 'زهرية',       en: 'a vase',                       m: 'glass' },
+  { ar: 'قارورة',      en: 'a bottle',                     m: 'glass' },
+  { ar: 'أباجورة',     en: 'a table lamp',                 m: 'glass' },
+
+  // metal
+  { ar: 'ثلاجة',       en: 'a refrigerator',               m: 'metal' },
+  { ar: 'فرن',         en: 'an oven or stove',             m: 'metal' },
+  { ar: 'مايكروويف',   en: 'a microwave oven',             m: 'metal' },
+  { ar: 'غسالة',       en: 'a washing machine',            m: 'metal' },
+  { ar: 'مكيف',        en: 'an air conditioner unit',      m: 'metal' },
+  { ar: 'مدفأة',       en: 'a radiator heater',            m: 'metal' },
+  { ar: 'رف حديد',     en: 'a metal shelving rack',        m: 'metal' },
+  { ar: 'قدر',         en: 'a metal cooking pot',          m: 'metal' },
+  { ar: 'مغسلة',       en: 'a metal kitchen sink',         m: 'metal' },
+  { ar: 'دراجة',       en: 'a bicycle',                    m: 'metal' },
+  { ar: 'مقبض باب',    en: 'a door handle',                m: 'metal' },
+
+  // floor
+  { ar: 'أرضية بلاط',  en: 'a tiled floor',                m: 'floor' },
+  { ar: 'أرضية خشب',   en: 'a wooden floor',               m: 'floor' },
+  { ar: 'أرضية إسمنت', en: 'a concrete floor',             m: 'floor' },
+  { ar: 'سقف',         en: 'a ceiling',                    m: 'hard' }
+];
+
+const EN_TO_OBJ = new Map(OBJECTS.map((o) => [o.en, o]));
+export const CANDIDATES = OBJECTS.map((o) => o.en);
+
+/* ------------------------------------------------------------------ *
+ * Label -> material bucket (fallback for non zero-shot engines)
  * ------------------------------------------------------------------
  * The classifier returns ImageNet-1k style labels ("television",
  * "studio couch", "prayer rug"). Keyword matching is deliberately used
@@ -175,8 +262,41 @@ export class CameraReader {
 /* ------------------------------------------------------------------ *
  * Classifier (transformers.js, in-browser)
  * ------------------------------------------------------------------ */
-const MODEL = 'Xenova/mobilevit-small';   // ~10 MB, ImageNet-1k, mobile-friendly
+const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';   // zero-shot, ~40 MB
 const CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.3.1';
+
+/* ------------------------------------------------------------------ *
+ * Optional cloud engine
+ * ------------------------------------------------------------------
+ * A key can never be hidden in a static site, so this never holds one.
+ * Instead it posts to a proxy YOU deploy and control:
+ *
+ *   POST <endpoint>  { "image": "data:image/jpeg;base64,..." }
+ *   200  { "label": "تلفاز سامسونج", "material": "glass", "score": 0.93 }
+ *
+ * `material` is optional; without it we fall back to keyword mapping.
+ * Configure by opening the page once with ?api=https://your-worker.dev
+ */
+const API_KEY_STORE = 'materia.apiEndpoint';
+
+export function getCloudEndpoint() {
+  try { return localStorage.getItem(API_KEY_STORE) || null; } catch { return null; }
+}
+export function setCloudEndpoint(url) {
+  try {
+    if (url) localStorage.setItem(API_KEY_STORE, url);
+    else localStorage.removeItem(API_KEY_STORE);
+  } catch { /* private mode */ }
+}
+
+/** Reads ?api= once and remembers it. */
+export function adoptEndpointFromUrl() {
+  try {
+    const u = new URLSearchParams(location.search).get('api');
+    if (u) { setCloudEndpoint(u); return u; }
+  } catch { /* ignore */ }
+  return getCloudEndpoint();
+}
 
 export class Recognizer {
   constructor(onStatus) {
@@ -184,8 +304,11 @@ export class Recognizer {
     this.loading = false;
     this.ready = false;
     this.error = null;
+    this.engine = 'clip';          // 'clip' | 'cloud'
     this.onStatus = onStatus || (() => {});
   }
+
+  get cloudAvailable() { return !!getCloudEndpoint(); }
 
   async load() {
     if (this.ready || this.loading) return this.ready;
@@ -205,7 +328,7 @@ export class Recognizer {
       try { if (navigator.gpu && await navigator.gpu.requestAdapter()) device = 'webgpu'; }
       catch { /* stay on wasm */ }
 
-      this.pipe = await pipeline('image-classification', MODEL, {
+      this.pipe = await pipeline('zero-shot-image-classification', CLIP_MODEL, {
         device,
         progress_callback: (p) => {
           if (p && p.status === 'progress' && p.progress != null) {
@@ -228,8 +351,43 @@ export class Recognizer {
     }
   }
 
+  /** Sends the crop to the user's own proxy. */
+  async classifyCloud(canvas) {
+    const url = getCloudEndpoint();
+    if (!url) return null;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: canvas.toDataURL('image/jpeg', 0.85) })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
+      if (!j || !j.label) throw new Error('رد غير صالح');
+      return {
+        label: String(j.label),
+        rawLabel: String(j.label),
+        score: typeof j.score === 'number' ? j.score : 0.9,
+        material: j.material || labelToMaterial(j.label),
+        engine: 'cloud',
+        all: []
+      };
+    } catch (e) {
+      this.error = 'سحابي: ' + ((e && e.message) || e);
+      console.error('classifyCloud failed', e);
+      return null;
+    }
+  }
+
   /** @returns {{label:string, score:number, material:string|null, all:Array}|null} */
   async classify(canvas) {
+    // The cloud engine wins when the user has configured a proxy.
+    if (this.engine === 'cloud' && this.cloudAvailable) {
+      const cloud = await this.classifyCloud(canvas);
+      if (cloud) return cloud;
+      // fall through to the local model rather than failing outright
+    }
+
     if (!this.ready) return null;
     try {
       // Feed pixels straight in. toDataURL() base64-encodes the whole image
@@ -241,22 +399,25 @@ export class Recognizer {
         input = canvas.toDataURL('image/jpeg', 0.85);
       }
 
-      const out = await this.pipe(input, { top_k: 5 });
+      const out = await this.pipe(input, CANDIDATES, {
+        hypothesis_template: '{}'
+      });
       if (!out || !out.length) return null;
 
-      // Prefer the highest-scoring label we can actually map to a material.
-      let chosen = null;
-      for (const c of out) {
-        const m = labelToMaterial(c.label);
-        if (m) { chosen = { ...c, material: m }; break; }
-      }
-      const best = chosen || { ...out[0], material: null };
+      // Zero-shot returns our own prompts, so the mapping is exact.
+      const best = out[0];
+      const obj = EN_TO_OBJ.get(best.label);
+
       return {
-        label: cleanLabel(best.label),
+        label: obj ? obj.ar : cleanLabel(best.label),
         rawLabel: best.label,
         score: best.score,
-        material: best.material,
-        all: out
+        material: obj ? obj.m : labelToMaterial(best.label),
+        engine: 'clip',
+        all: out.slice(0, 4).map((o) => ({
+          label: (EN_TO_OBJ.get(o.label) || {}).ar || o.label,
+          score: o.score
+        }))
       };
     } catch (e) {
       this.error = (e && e.message) || String(e);
